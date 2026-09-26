@@ -1,0 +1,14 @@
+[package]
+name = "crab-settings"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["gif", "png", "rayon"] }
+snafu.workspace = true
+toml.workspace = true
+serde_plain.workspace = true
+crab-common = {path="../crab-common"}
+ktx2-rw = { git = "https://github.com/AllenDang/ktx2-rw" }
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "crab-common"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+directories = "6.0.0"
+snafu.workspace = true
+serde.workspace = true
+serde_plain.workspace = true
+
+[lints]
+workspace = true

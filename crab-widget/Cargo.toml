@@ -1,0 +1,18 @@
+[package]
+name = "crab-widget"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+calloop = "0.14.4"
+calloop-wayland-source = "0.4.1"
+gl = "0.14.0"
+glutin = { version = "0.32.3", default-features = false, features = ["egl", "wayland"] }
+raw-window-handle = "0.6.2"
+smithay-client-toolkit = "0.21.1"
+snafu.workspace = true
+wayland-client = "0.31.15"
+wayland-egl = "0.32.11"
+
+[lints]
+workspace = true

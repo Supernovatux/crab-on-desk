@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crab-settings", "crab-common","crab-widget"]
+
+[workspace.dependencies]
+snafu = "0.9.2"
+serde = {version = "1.0.229", features = ["derive"]}
+serde_plain = "1.0.2"
+toml = "1.1.6"
+[workspace.lints.clippy]
+# UM, ACTUALLY
+pedantic = { level = "deny", priority = -1 }
+missing_errors_doc = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+
+# DEVELOPING LINTS
+nursery = { level = "deny", priority = -1 }
+# DENY PANICS
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "deny"
+# arithmetic_side_effects = "warn"
+unreachable = "warn"
+unimplemented = "warn"
+unchecked_time_subtraction = "deny"
+todo = "allow"
+string_slice = "warn"
+panic_in_result_fn = "warn"
+panic = "warn"
+exit = "warn"
+# as_conversions = "warn"
+
+
