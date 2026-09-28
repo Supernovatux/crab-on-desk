@@ -14,13 +14,13 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod toml_file;
+pub const GUI_BINARY: &str = "crab-gui";
+pub const SETTINGS_MODE: &str = "settings";
+pub const PERMISSION_MODE: &str = "perm";
+pub const SETTINGS_APP_ID: &str = "com.supernovatux.CrabOnDesk";
+pub const PERMISSION_APP_ID: &str = "com.supernovatux.CrabOnDesk.Permission";
+pub const SETTINGS_BINARY: &str = "crab-settings";
+pub const GENERATE_COMMAND: &str = "generate";
+pub const IMPORT_COMMAND: &str = "import";
+pub const INSTALL_HOOKS_COMMAND: &str = "install-hooks";
+pub const UNINSTALL_HOOKS_COMMAND: &str = "uninstall-hooks";

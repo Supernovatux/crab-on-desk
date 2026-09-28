@@ -1,0 +1,181 @@
+<!--
+  crab-on-desk, a Rust based desktop pet for coding agents.
+      Copyright (C) 2026  Supernovatux thulashitharan.d@gmail.com
+
+      This program is free software: you can redistribute it and/or modify
+      it under the terms of the GNU Affero General Public License as
+      published by the Free Software Foundation, either version 3 of the
+      License, or (at your option) any later version.
+
+      This program is distributed in the hope that it will be useful,
+      but WITHOUT ANY WARRANTY; without even the implied warranty of
+      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+      GNU Affero General Public License for more details.
+
+      You should have received a copy of the GNU Affero General Public License
+      along with this program.  If not, see <https://www.gnu.org/licenses/>.
+-->
+
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body { position: relative; }
+  #pet { position: absolute; display: block; pointer-events: none; }
+</style>
+</head>
+<body>
+<script>
+const FRAME_RATE = 15;
+const FRAME_MS = 1000 / FRAME_RATE;
+const MAX_LOOP_MS = 20000;
+const VIRTUAL_CLOCK = `<script><![CDATA[
+(() => {
+  let now = 0;
+  let nextId = 1;
+  let seed = 1;
+  const callbacks = new Map();
+  performance.now = () => now;
+  Math.random = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+  window.requestAnimationFrame = (callback) => { callbacks.set(nextId, callback); return nextId++; };
+  window.cancelAnimationFrame = (id) => callbacks.delete(id);
+  window.__crabAdvanceClock = (time) => {
+    now = time;
+    const pending = [...callbacks.values()];
+    callbacks.clear();
+    for (const callback of pending) callback(now);
+  };
+})();
+]]><\/script>`;
+
+let clip = null;
+
+function nextPaint() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+function applyStyle(element, style) {
+  for (const [key, value] of Object.entries(style)) element.style[key] = value;
+}
+
+async function withVirtualClock(url) {
+  const text = await (await fetch(url)).text();
+  const clocked = text.replace(/<svg\b[^>]*>/, (open) => open + VIRTUAL_CLOCK);
+  return URL.createObjectURL(new Blob([clocked], { type: "image/svg+xml" }));
+}
+
+async function loadSvg(url, style, scriptedCycleMs) {
+  const object = document.createElement("object");
+  object.id = "pet";
+  object.type = "image/svg+xml";
+  applyStyle(object, style);
+  const loaded = new Promise((resolve, reject) => {
+    object.onload = resolve;
+    object.onerror = () => reject(new Error(`cannot load ${url}`));
+  });
+  object.data = scriptedCycleMs ? await withVirtualClock(url) : url;
+  document.body.replaceChildren(object);
+  await loaded;
+  const svgWindow = object.contentDocument.defaultView;
+  const svg = object.contentDocument.documentElement;
+  if (svg.querySelector("animate, animateTransform, animateMotion, set")) {
+    throw new Error(`${url} uses SMIL animation, which is not supported`);
+  }
+  const animations = object.contentDocument.getAnimations();
+  for (const animation of animations) animation.pause();
+  const timings = animations.map((animation) => animation.effect.getComputedTiming());
+  const finite = timings.filter((timing) => Number.isFinite(timing.endTime));
+  const loops = finite.length === 0;
+  const periods = timings.map(iterationPeriod);
+  if (scriptedCycleMs) periods.push(scriptedCycleMs);
+  const lengthMs = loops ? loopPeriodMs(periods) : Math.max(...finite.map((t) => t.endTime));
+  const frameCount = Math.max(1, Math.round(lengthMs / FRAME_MS));
+  clip = {
+    frameCount,
+    loops,
+    delays: Array(frameCount).fill([1, FRAME_RATE]),
+    seek: (index) => {
+      const time = Math.min(index * FRAME_MS, loops ? Infinity : lengthMs);
+      for (const animation of object.contentDocument.getAnimations()) {
+        animation.pause();
+        animation.currentTime = time;
+      }
+      if (scriptedCycleMs) svgWindow.__crabAdvanceClock(time);
+    },
+  };
+  return { frameCount, loops, lengthMs };
+}
+
+function gcd(a, b) {
+  return b === 0 ? a : gcd(b, a % b);
+}
+
+function iterationPeriod(timing) {
+  const iteration = Math.round(timing.duration);
+  return timing.direction && timing.direction.startsWith("alternate") ? iteration * 2 : iteration;
+}
+
+function loopPeriodMs(allPeriods) {
+  const periods = [...new Set(allPeriods.filter((period) => period > 0))];
+  if (periods.length === 0) return 0;
+  const lcm = periods.reduce((acc, period) => (acc * period) / gcd(acc, period), 1);
+  if (lcm <= MAX_LOOP_MS) return lcm;
+  const seamError = (length) =>
+    periods.reduce((sum, period) => {
+      const remainder = length % period;
+      return sum + Math.min(remainder, period - remainder);
+    }, 0);
+  const firstFrames = Math.ceil(Math.max(...periods) / FRAME_MS);
+  let best = firstFrames * FRAME_MS;
+  for (let frames = firstFrames; frames * FRAME_MS <= MAX_LOOP_MS; frames += 1) {
+    if (seamError(frames * FRAME_MS) < seamError(best)) best = frames * FRAME_MS;
+  }
+  return best;
+}
+
+async function loadApng(url, style) {
+  const canvas = document.createElement("canvas");
+  canvas.id = "pet";
+  applyStyle(canvas, style);
+  const data = await (await fetch(url)).arrayBuffer();
+  const decoder = new ImageDecoder({ data, type: "image/png" });
+  await decoder.tracks.ready;
+  const track = decoder.tracks.selectedTrack;
+  await decoder.completed;
+  const frames = [];
+  for (let frameIndex = 0; frameIndex < track.frameCount; frameIndex += 1) {
+    frames.push((await decoder.decode({ frameIndex })).image);
+  }
+  const first = frames[0];
+  canvas.width = first.displayWidth;
+  canvas.height = first.displayHeight;
+  document.body.replaceChildren(canvas);
+  const context = canvas.getContext("2d");
+  const loops = track.repetitionCount !== 0;
+  clip = {
+    frameCount: frames.length,
+    loops,
+    delays: frames.map((frame) => [Math.max(1, Math.round((frame.duration || 0) / 1000)), 1000]),
+    seek: (index) => {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(frames[index], 0, 0);
+    },
+  };
+  return { frameCount: frames.length, loops };
+}
+
+window.loadClip = (kind, url, style, scriptedCycleMs) =>
+  kind === "svg" ? loadSvg(url, style, scriptedCycleMs) : loadApng(url, style);
+window.clipDelays = () => clip.delays;
+window.showFrame = async (index) => {
+  clip.seek(index);
+  await nextPaint();
+};
+</script>
+</body>
+</html>

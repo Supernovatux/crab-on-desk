@@ -1,18 +1,37 @@
+// crab-on-desk, a Rust based desktop pet for coding agents.
+//     Copyright (C) 2026  Supernovatux thulashitharan.d@gmail.com
+//
+//     This program is free software: you can redistribute it and/or modify
+//     it under the terms of the GNU Affero General Public License as
+//     published by the Free Software Foundation, either version 3 of the
+//     License, or (at your option) any later version.
+//
+//     This program is distributed in the hope that it will be useful,
+//     but WITHOUT ANY WARRANTY; without even the implied warranty of
+//     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//     GNU Affero General Public License for more details.
+//
+//     You should have received a copy of the GNU Affero General Public License
+//     along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 use std::{
     ffi::{CString, NulError},
     num::{NonZero, NonZeroU32},
 };
 
 use glutin::{
-    config::ConfigTemplateBuilder,
-    context::{ContextAttributesBuilder, GlProfile, NotCurrentGlContext},
+    config::{Config, ConfigTemplateBuilder},
+    context::{ContextAttributesBuilder, GlProfile, NotCurrentGlContext, PossiblyCurrentGlContext},
     display::{Display as gluDisplay, GlDisplay},
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-use snafu::{ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
-use crate::renderer::{Renderer, RendererError};
+use crate::{
+    renderer::{Renderer, RendererError},
+    theme::Animation,
+};
 
 #[derive(Debug, Snafu)]
 pub enum OpenglError {
@@ -31,33 +50,35 @@ pub enum OpenglError {
     #[snafu(context(false))]
     Cstring { source: NulError },
 }
-const VERTICES: [f32; 15] = [
-    // x,    y,     r,   g,   b
-    0.0, 0.5, 1.0, 0.0, 0.0, //
-    -0.5, -0.5, 0.0, 1.0, 0.0, //
-    0.5, -0.5, 0.0, 0.0, 1.0,
-];
-
 const VERTEX_SHADER: &str = "#version 330 core
-layout(location = 0) in vec2 a_pos;
-layout(location = 1) in vec3 a_color;
-out vec3 v_color;
+uniform vec2 u_scale;
+out vec2 v_uv;
 void main() {
-    gl_Position = vec4(a_pos, 0.0, 1.0);
-    v_color = a_color;
+    vec2 corner = vec2(gl_VertexID & 1, gl_VertexID >> 1);
+    v_uv = vec2(corner.x, 1.0 - corner.y);
+    gl_Position = vec4((corner * 2.0 - 1.0) * u_scale, 0.0, 1.0);
 }";
 
 const FRAGMENT_SHADER: &str = "#version 330 core
-in vec3 v_color;
+uniform sampler2DArray u_frames;
+uniform int u_frame;
+in vec2 v_uv;
 out vec4 frag_color;
 void main() {
-    frag_color = vec4(v_color, 1.0);
+    frag_color = texture(u_frames, vec3(v_uv, float(u_frame)));
 }";
+
 pub struct Opengl {
+    gl_display: gluDisplay,
+    config: Config,
     gl_surface: glutin::surface::Surface<WindowSurface>,
     gl_context: glutin::context::PossiblyCurrentContext,
     program: gl::types::GLuint,
     vao: gl::types::GLuint,
+    texture: gl::types::GLuint,
+    scale_location: gl::types::GLint,
+    frame_location: gl::types::GLint,
+    frame_aspect: f32,
 }
 
 impl Renderer for Opengl {
@@ -88,15 +109,7 @@ impl Renderer for Opengl {
             .context(GlutinSnafu {
             thing: "creating context",
         })?;
-        let surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-            window,
-            NonZero::new(w).ok_or(OpenglError::Size)?,
-            NonZero::new(h).ok_or(OpenglError::Size)?,
-        );
-        let gl_surface = unsafe { gl_display.create_window_surface(&config, &surface_attributes) }
-            .context(GlutinSnafu {
-                thing: "glutin surface",
-            })?;
+        let gl_surface = window_surface(&gl_display, &config, window, w, h)?;
         let gl_context = not_curr_context
             .make_current(&gl_surface)
             .context(GlutinSnafu { thing: "context" })?;
@@ -105,24 +118,76 @@ impl Renderer for Opengl {
             gl_display.get_proc_address(symbol.as_c_str()).cast()
         });
         let program = unsafe { link_program(VERTEX_SHADER, FRAGMENT_SHADER) }?;
-        let vao = unsafe { setup_triangle() };
+        let scale_location = unsafe { uniform_location(program, "u_scale") }?;
+        let frame_location = unsafe { uniform_location(program, "u_frame") }?;
+        let sampler_location = unsafe { uniform_location(program, "u_frames") }?;
+        let (vao, texture) = unsafe { setup_quad(program, sampler_location) };
 
         Ok(Box::new(Self {
+            gl_display,
+            config,
             gl_surface,
             gl_context,
             program,
             vao,
+            texture,
+            scale_location,
+            frame_location,
+            frame_aspect: 1.0,
         }))
     }
-    fn draw(&mut self, w: i32, h: i32) {
+    fn set_animation(&mut self, animation: &Animation) -> Result<(), RendererError> {
+        let size = i32::try_from(animation.blocks.len())
+            .ok()
+            .context(SizeSnafu)?;
+        unsafe {
+            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
+            gl::CompressedTexImage3D(
+                gl::TEXTURE_2D_ARRAY,
+                0,
+                gl::COMPRESSED_RGBA_BPTC_UNORM,
+                animation.width as i32,
+                animation.height as i32,
+                animation.frame_count as i32,
+                0,
+                size,
+                animation.blocks.as_ptr().cast(),
+            );
+        }
+        self.frame_aspect = (f64::from(animation.width) / f64::from(animation.height)) as f32;
+        Ok(())
+    }
+    fn draw(&mut self, w: i32, h: i32, frame: u32, mirrored: bool) {
+        let surface_aspect = (f64::from(w) / f64::from(h)) as f32;
+        let direction = if mirrored { -1.0 } else { 1.0 };
+        let scale_x = direction * (self.frame_aspect / surface_aspect).min(1.0);
+        let scale_y = (surface_aspect / self.frame_aspect).min(1.0);
         unsafe {
             gl::Viewport(0, 0, w, h);
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl::UseProgram(self.program);
+            gl::Uniform2f(self.scale_location, scale_x, scale_y);
+            gl::Uniform1i(self.frame_location, frame as i32);
             gl::BindVertexArray(self.vao);
-            gl::DrawArrays(gl::TRIANGLES, 0, 3);
+            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
+            gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
         }
+    }
+    fn replace_window(
+        &mut self,
+        window: RawWindowHandle,
+        w: u32,
+        h: u32,
+    ) -> Result<(), RendererError> {
+        let gl_surface = window_surface(&self.gl_display, &self.config, window, w, h)?;
+        self.gl_context
+            .make_current(&gl_surface)
+            .context(GlutinSnafu {
+                thing: "switching surface",
+            })?;
+        self.gl_surface = gl_surface;
+        Ok(())
     }
     fn swapbuffers(&self) -> Result<(), RendererError> {
         self.gl_surface
@@ -141,6 +206,23 @@ impl Renderer for Opengl {
         Ok(())
     }
 }
+fn window_surface(
+    gl_display: &gluDisplay,
+    config: &Config,
+    window: RawWindowHandle,
+    w: u32,
+    h: u32,
+) -> Result<glutin::surface::Surface<WindowSurface>, OpenglError> {
+    let surface_attributes = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+        window,
+        NonZero::new(w).ok_or(OpenglError::Size)?,
+        NonZero::new(h).ok_or(OpenglError::Size)?,
+    );
+    unsafe { gl_display.create_window_surface(config, &surface_attributes) }.context(GlutinSnafu {
+        thing: "glutin surface",
+    })
+}
+
 unsafe fn compile_shader(
     src: &str,
     kind: gl::types::GLenum,
@@ -197,35 +279,61 @@ unsafe fn link_program(
     }
 }
 
-unsafe fn setup_triangle() -> gl::types::GLuint {
+unsafe fn uniform_location(
+    program: gl::types::GLuint,
+    name: &str,
+) -> Result<gl::types::GLint, OpenglError> {
+    let c_name = CString::new(name)?;
+    let location = unsafe { gl::GetUniformLocation(program, c_name.as_ptr()) };
+    ensure!(
+        location >= 0,
+        ProgramSnafu {
+            thing: format!("missing uniform {name}"),
+        }
+    );
+    Ok(location)
+}
+
+unsafe fn setup_quad(
+    program: gl::types::GLuint,
+    sampler_location: gl::types::GLint,
+) -> (gl::types::GLuint, gl::types::GLuint) {
     unsafe {
         let mut vao = 0;
-        let mut vbo = 0;
+        let mut texture = 0;
         gl::GenVertexArrays(1, &raw mut vao);
-        gl::GenBuffers(1, &raw mut vbo);
+        gl::GenTextures(1, &raw mut texture);
 
-        gl::BindVertexArray(vao);
-        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
-        gl::BufferData(
-            gl::ARRAY_BUFFER,
-            (VERTICES.len() * size_of::<f32>()) as isize,
-            VERTICES.as_ptr().cast(),
-            gl::STATIC_DRAW,
+        gl::BindTexture(gl::TEXTURE_2D_ARRAY, texture);
+        gl::TexParameteri(
+            gl::TEXTURE_2D_ARRAY,
+            gl::TEXTURE_MIN_FILTER,
+            gl::LINEAR as i32,
         );
-
-        let stride = (5 * size_of::<f32>()) as i32;
-        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, stride, std::ptr::null());
-        gl::EnableVertexAttribArray(0);
-        gl::VertexAttribPointer(
-            1,
-            3,
-            gl::FLOAT,
-            gl::FALSE,
-            stride,
-            (2 * size_of::<f32>()) as *const _,
+        gl::TexParameteri(
+            gl::TEXTURE_2D_ARRAY,
+            gl::TEXTURE_MAG_FILTER,
+            gl::LINEAR as i32,
         );
-        gl::EnableVertexAttribArray(1);
+        gl::TexParameteri(
+            gl::TEXTURE_2D_ARRAY,
+            gl::TEXTURE_WRAP_S,
+            gl::CLAMP_TO_EDGE as i32,
+        );
+        gl::TexParameteri(
+            gl::TEXTURE_2D_ARRAY,
+            gl::TEXTURE_WRAP_T,
+            gl::CLAMP_TO_EDGE as i32,
+        );
+        gl::TexParameteri(gl::TEXTURE_2D_ARRAY, gl::TEXTURE_MAX_LEVEL, 0);
 
-        vao
+        gl::UseProgram(program);
+        gl::Uniform1i(sampler_location, 0);
+        gl::ActiveTexture(gl::TEXTURE0);
+
+        gl::Enable(gl::BLEND);
+        gl::BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
+
+        (vao, texture)
     }
 }

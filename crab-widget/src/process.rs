@@ -14,13 +14,21 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod toml_file;
+use std::fs;
+
+const PROC: &str = "/proc";
+
+#[must_use]
+pub fn find(name: &str) -> Vec<u32> {
+    let Ok(entries) = fs::read_dir(PROC) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse().ok()?;
+            let comm = fs::read_to_string(entry.path().join("comm")).ok()?;
+            (comm.trim_end() == name).then_some(pid)
+        })
+        .collect()
+}

@@ -14,13 +14,9 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod toml_file;
+use std::hash::{BuildHasher, Hasher, RandomState};
+
+#[must_use]
+pub fn roll() -> u64 {
+    RandomState::new().build_hasher().finish()
+}

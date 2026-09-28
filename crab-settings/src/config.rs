@@ -14,13 +14,31 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod toml_file;
+use crab_common::{
+    config::Config,
+    dirs::{CommonError, get_config_file},
+    toml_file::{self, TomlFileError},
+};
+use snafu::Snafu;
+
+pub const DEFAULT_THEME: &str = "clawd";
+
+#[derive(Debug, Snafu)]
+pub enum ConfigError {
+    #[snafu(context(false))]
+    Dir { source: CommonError },
+    #[snafu(context(false))]
+    Toml { source: TomlFileError },
+}
+
+pub fn write_default_if_missing() -> Result<(), ConfigError> {
+    let path = get_config_file()?;
+    if path.exists() {
+        return Ok(());
+    }
+    let config = Config {
+        default_theme: DEFAULT_THEME.to_owned(),
+        free_roam: true,
+    };
+    Ok(toml_file::write(path, &config)?)
+}

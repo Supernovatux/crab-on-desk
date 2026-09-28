@@ -14,13 +14,31 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod toml_file;
+use std::env;
+
+use crab_common::gui::{PERMISSION_MODE, SETTINGS_MODE};
+use snafu::Snafu;
+
+mod desktop;
+mod permission;
+mod settings;
+mod theme;
+
+#[derive(Debug, Snafu)]
+enum GuiError {
+    #[snafu(context(false))]
+    Permission { source: permission::PermissionError },
+    #[snafu(context(false))]
+    Settings { source: settings::SettingsError },
+    #[snafu(display("Usage: crab-gui [{SETTINGS_MODE} | {PERMISSION_MODE}]"))]
+    Usage,
+}
+
+#[snafu::report]
+fn main() -> Result<(), GuiError> {
+    match env::args().nth(1).as_deref() {
+        None | Some(SETTINGS_MODE) => Ok(settings::run()?),
+        Some(PERMISSION_MODE) => Ok(permission::run()?),
+        Some(_) => UsageSnafu.fail(),
+    }
+}

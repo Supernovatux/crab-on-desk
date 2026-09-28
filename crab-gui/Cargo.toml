@@ -1,0 +1,16 @@
+[package]
+name = "crab-gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crab-common = { version = "0.1.0", path = "../crab-common" }
+hyprland = { version = "0.4.0-beta.3", default-features = false, features = ["data", "dispatch"] }
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "wayland", "x11", "thread-pool", "linux-theme-detection", "crisp", "image-without-codecs"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+mundy = { version = "0.2.3", default-features = false, features = ["async-io", "accent-color", "color-scheme"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+snafu.workspace = true
+
+[lints]
+workspace = true
