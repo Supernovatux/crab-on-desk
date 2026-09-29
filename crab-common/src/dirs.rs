@@ -28,7 +28,7 @@ use crate::{
     atlas::{Animations, MANIFEST_FILE},
     claude::{CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR_VAR, CLAUDE_SETTINGS_FILE},
     config::CONFIG_FILE,
-    gui::SETTINGS_LOCK,
+    gui::{SETTINGS_LOCK, WIDGET_LOCK},
 };
 
 const APP_DIR: &str = "crab-on-desk";
@@ -66,6 +66,10 @@ pub fn get_agent_socket() -> Result<PathBuf, CommonError> {
 
 pub fn get_settings_lock() -> Result<PathBuf, CommonError> {
     Ok(get_agent_socket()?.with_file_name(SETTINGS_LOCK))
+}
+
+pub fn get_widget_lock() -> Result<PathBuf, CommonError> {
+    Ok(get_agent_socket()?.with_file_name(WIDGET_LOCK))
 }
 
 pub fn get_claude_settings() -> Result<PathBuf, CommonError> {

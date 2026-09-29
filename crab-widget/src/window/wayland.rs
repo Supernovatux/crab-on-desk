@@ -997,7 +997,9 @@ impl<T: Renderer + 'static> CompositorHandler for _WaylandWindow<T> {
         _surface: &wl_surface::WlSurface,
         output: &wl_output::WlOutput,
     ) {
-        self.output = Some(output.clone());
+        if self.output.is_none() {
+            self.output = Some(output.clone());
+        }
         self.report_center();
     }
 

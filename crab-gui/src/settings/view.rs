@@ -278,18 +278,13 @@ impl Settings {
     }
 
     fn displays(&self) -> Element<'_, Message> {
-        let rows = match (&self.desktop, &self.outputs) {
-            (None, _) => vec![self.row(
-                "Not supported here",
-                Some("Listing screens needs Hyprland for now."),
-                space().into(),
-            )],
-            (Some(_), Err(error)) => vec![self.row_owned(
+        let rows = match &self.outputs {
+            Err(error) => vec![self.row_owned(
                 "Unable to list screens".to_owned(),
                 Some(error.clone()),
                 space().into(),
             )],
-            (Some(_), Ok(outputs)) => outputs
+            Ok(outputs) => outputs
                 .iter()
                 .map(|output| {
                     self.row_owned(

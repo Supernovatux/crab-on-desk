@@ -6,3 +6,9 @@ assets/themes/cloudling
 build
 assets
 .claude
+crab-codex/report.json
+crab-common/report.json
+crab-gui/report.json
+crab-hook/report.json
+crab-settings/report.json
+crab-widget/report.json

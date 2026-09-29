@@ -18,15 +18,16 @@ use std::{
     env, io,
     os::unix::process::CommandExt,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Command,
     time::Instant,
 };
 
 use crab_common::{
     atlas::Animations,
     config::{Config, ConfigError},
-    dirs::{CommonError, get_sibling_executable},
+    dirs::{CommonError, get_sibling_executable, get_widget_lock},
     gui::{GUI_BINARY, INIT_MODE},
+    process,
 };
 use crab_widget::{
     handler::{self, HandlerError, Outcome},
@@ -58,10 +59,17 @@ enum WidgetError {
     Dir { source: CommonError },
     #[snafu(display("Unable to start {GUI_BINARY} {INIT_MODE}"))]
     Init { source: io::Error },
+    #[snafu(display("Unable to lock {path:?}"))]
+    Lock { source: io::Error, path: PathBuf },
 }
 
 #[snafu::report]
 fn main() -> Result<(), WidgetError> {
+    let path = get_widget_lock()?;
+    let Some(_lock) = process::try_lock(&path).context(LockSnafu { path })? else {
+        eprintln!("crab-widget is already running");
+        return Ok(());
+    };
     let config = match Config::load() {
         Ok(config) => config,
         Err(error) => {
@@ -84,12 +92,8 @@ fn main() -> Result<(), WidgetError> {
 }
 
 fn launch_init() -> Result<(), WidgetError> {
-    Command::new(get_sibling_executable(GUI_BINARY)?)
+    process::detached(&get_sibling_executable(GUI_BINARY)?)
         .arg(INIT_MODE)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
         .spawn()
         .context(InitSnafu)?;
     Ok(())

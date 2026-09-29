@@ -16,8 +16,8 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    os::unix::{net::UnixStream, process::CommandExt},
-    process::{Child, Command, Stdio},
+    os::unix::net::UnixStream,
+    process::Child,
     time::{Duration, Instant},
 };
 
@@ -301,12 +301,8 @@ impl Handler {
         let spawned = get_sibling_executable(GUI_BINARY)
             .map_err(|error| snafu::Report::from_error(error).to_string())
             .and_then(|program| {
-                Command::new(&program)
+                crab_common::process::detached(&program)
                     .args([SETTINGS_MODE, DISPLAYS_PAGE])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .process_group(0)
                     .spawn()
                     .map_err(|error| format!("Unable to start {}: {error}", program.display()))
             });

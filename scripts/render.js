@@ -17,6 +17,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
 const { pathToFileURL } = require("node:url");
@@ -265,14 +266,23 @@ function apng(frames, delays, loops) {
   return Buffer.concat(parts);
 }
 
-function paintAfterInvalidate(contents) {
+function paintStamped(contents, size, seek) {
   return new Promise((resolve) => {
-    contents.once("paint", (_event, _dirty, image) => resolve(image));
+    const onPaint = (_event, _dirty, image) => {
+      const [blue, green, red] = image.crop({ x: 0, y: size, width: 1, height: 1 }).toBitmap();
+      if (((red << 16) | (green << 8) | blue) !== seek) {
+        contents.invalidate();
+        return;
+      }
+      contents.off("paint", onPaint);
+      resolve(image.crop({ x: 0, y: 0, width: size, height: size }));
+    };
+    contents.on("paint", onPaint);
     contents.invalidate();
   });
 }
 
-async function renderClip(window, theme, role, file, source) {
+async function renderClip(window, size, theme, role, file, source) {
   const isImage = !source.endsWith(".svg");
   const contents = window.webContents;
   const call = (expression) => contents.executeJavaScript(expression);
@@ -283,20 +293,17 @@ async function renderClip(window, theme, role, file, source) {
   const info = await call(`loadClip(...${JSON.stringify(args)})`);
   const frames = [];
   for (let index = 0; index < info.frameCount; index += 1) {
-    await call(`showFrame(${index})`);
-    const image = await paintAfterInvalidate(contents);
+    const seek = await call(`showFrame(${index})`);
+    const image = await paintStamped(contents, size, seek);
     frames.push(image.toPNG());
   }
   return { info, png: apng(frames, await call("clipDelays()"), info.loops) };
 }
 
-async function main() {
-  const [reference, output, sizeText, ...themes] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-  const size = Number(sizeText);
-  if (!reference || !output || !Number.isInteger(size) || themes.length === 0) throw new Error(USAGE);
+function createWindow(size) {
   const window = new BrowserWindow({
     width: size,
-    height: size,
+    height: size + 1,
     useContentSize: true,
     show: false,
     frame: false,
@@ -304,7 +311,25 @@ async function main() {
     backgroundColor: "#00000000",
     webPreferences: { offscreen: true, webSecurity: false, backgroundThrottling: false },
   });
-  await window.loadFile(path.join(__dirname, "page.html"));
+  return window.loadFile(path.join(__dirname, "page.html")).then(() => window);
+}
+
+async function renderJobs(window, size, jobs) {
+  for (let job = jobs.shift(); job; job = jobs.shift()) {
+    const { themeName, theme, directory, role, file, source } = job;
+    const { info, png } = await renderClip(window, size, theme, role, file, source);
+    fs.writeFileSync(path.join(directory, `${role}.apng`), png);
+    const kind = info.loops ? "loop" : "once";
+    console.log(`${themeName}/${role} <- ${file}: ${info.frameCount} frames, ${kind}${info.lengthMs ? `, ${Math.round(info.lengthMs)} ms` : ""}`);
+  }
+  window.destroy();
+}
+
+async function main() {
+  const [reference, output, sizeText, ...themes] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+  const size = Number(sizeText);
+  if (!reference || !output || !Number.isInteger(size) || themes.length === 0) throw new Error(USAGE);
+  const jobs = [];
   for (const themeName of themes) {
     const theme = JSON.parse(fs.readFileSync(path.join(reference, "themes", themeName, "theme.json"), "utf8"));
     const directory = path.join(output, themeName);
@@ -312,12 +337,12 @@ async function main() {
     const { clips, behaviour } = plan(theme);
     fs.writeFileSync(path.join(directory, "theme.toml"), behaviourToml(behaviour));
     for (const [role, file] of clips) {
-      const { info, png } = await renderClip(window, theme, role, file, sourceFile(reference, themeName, file));
-      fs.writeFileSync(path.join(directory, `${role}.apng`), png);
-      const kind = info.loops ? "loop" : "once";
-      console.log(`${themeName}/${role} <- ${file}: ${info.frameCount} frames, ${kind}${info.lengthMs ? `, ${Math.round(info.lengthMs)} ms` : ""}`);
+      jobs.push({ themeName, theme, directory, role, file, source: sourceFile(reference, themeName, file) });
     }
   }
+  const workers = Math.min(Number(process.env.RENDER_JOBS) || os.availableParallelism(), jobs.length);
+  const windows = await Promise.all(Array.from({ length: workers }, () => createWindow(size)));
+  await Promise.all(windows.map((window) => renderJobs(window, size, jobs)));
 }
 
 app.whenReady().then(main).then(

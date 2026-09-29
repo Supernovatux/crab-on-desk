@@ -40,8 +40,6 @@ const RECEIVE_TIMEOUT: Duration = Duration::from_millis(100);
 pub enum AgentError {
     #[snafu(context(false))]
     Dir { source: CommonError },
-    #[snafu(display("Another crab-on-desk is listening on {path:?}"))]
-    AlreadyRunning { path: PathBuf },
     #[snafu(display("Unable to listen on {path:?}"))]
     Bind { source: io::Error, path: PathBuf },
     #[snafu(display("Unable to add the agent socket to the event loop"))]
@@ -94,9 +92,6 @@ pub fn listen<D: 'static>(
 }
 
 fn bind(path: &Path) -> Result<UnixListener, AgentError> {
-    if UnixStream::connect(path).is_ok() {
-        return AlreadyRunningSnafu { path }.fail();
-    }
     match fs::remove_file(path) {
         Err(error) if error.kind() != ErrorKind::NotFound => {
             return Err(error).context(BindSnafu { path });

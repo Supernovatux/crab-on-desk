@@ -64,20 +64,27 @@ enum Mode {
     Hold,
 }
 
-const CLIPS: [(Animations, Row, Mode); 13] = [
-    (Animations::Idle, Row::Idle, Mode::Loop),
-    (Animations::Thinking, Row::Review, Mode::Loop),
-    (Animations::Working, Row::Running, Mode::Loop),
-    (Animations::Sweeping, Row::Running, Mode::Loop),
-    (Animations::Carrying, Row::Running, Mode::Loop),
-    (Animations::Notification, Row::Waiting, Mode::Loop),
-    (Animations::Attention, Row::Jumping, Mode::Loop),
-    (Animations::Error, Row::Failed, Mode::Loop),
-    (Animations::Sleeping, Row::Idle, Mode::Hold),
-    (Animations::ReactDrag, Row::Running, Mode::Loop),
-    (Animations::ReactLeft, Row::Jumping, Mode::Once),
-    (Animations::ReactRight, Row::Jumping, Mode::Once),
-    (Animations::ReactDouble1, Row::Waving, Mode::Once),
+const DRAG: &[Row] = &[
+    Row::RunningRight,
+    Row::RunningRight,
+    Row::RunningLeft,
+    Row::RunningLeft,
+];
+
+const CLIPS: [(Animations, &[Row], Mode); 13] = [
+    (Animations::Idle, &[Row::Idle], Mode::Loop),
+    (Animations::Thinking, &[Row::Review], Mode::Loop),
+    (Animations::Working, &[Row::Running], Mode::Loop),
+    (Animations::Sweeping, &[Row::Running], Mode::Loop),
+    (Animations::Carrying, &[Row::Running], Mode::Loop),
+    (Animations::Notification, &[Row::Waiting], Mode::Loop),
+    (Animations::Attention, &[Row::Jumping], Mode::Loop),
+    (Animations::Error, &[Row::Failed], Mode::Loop),
+    (Animations::Sleeping, &[Row::Idle], Mode::Hold),
+    (Animations::ReactDrag, DRAG, Mode::Loop),
+    (Animations::ReactLeft, &[Row::Jumping], Mode::Once),
+    (Animations::ReactRight, &[Row::Jumping], Mode::Once),
+    (Animations::ReactDouble1, &[Row::Waving], Mode::Once),
 ];
 
 pub fn install(pet: &Pet) -> Result<PathBuf, ThemeError> {
@@ -94,8 +101,8 @@ pub fn install(pet: &Pet) -> Result<PathBuf, ThemeError> {
 
 fn write_theme(pet: &Pet, dir: &Path) -> Result<(), ThemeError> {
     let mut animations = BTreeMap::new();
-    for (animation, row, mode) in CLIPS {
-        let (layers, delays) = clip(pet, row, mode);
+    for (animation, rows, mode) in CLIPS {
+        let (layers, delays) = clip(pet, rows, mode);
         let path = get_animation_texture(dir, animation)?;
         let info = encode_frames(
             CANVAS,
@@ -125,8 +132,12 @@ fn write_theme(pet: &Pet, dir: &Path) -> Result<(), ThemeError> {
     Ok(())
 }
 
-fn clip(pet: &Pet, row: Row, mode: Mode) -> (Vec<Vec<u8>>, Vec<u32>) {
-    let frames = pet.frames(row).into_iter().zip(row.durations_ms().iter().copied());
+fn clip(pet: &Pet, rows: &[Row], mode: Mode) -> (Vec<Vec<u8>>, Vec<u32>) {
+    let frames = rows.iter().flat_map(|&row| {
+        pet.frames(row)
+            .into_iter()
+            .zip(row.durations_ms().iter().copied())
+    });
     let (frames, delays): (Vec<RgbaImage>, Vec<u32>) = match mode {
         Mode::Hold => frames.take(1).unzip(),
         Mode::Loop | Mode::Once => frames.unzip(),

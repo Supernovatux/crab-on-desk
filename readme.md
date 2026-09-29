@@ -5,7 +5,7 @@ This project is a Linux-focused Rust clone of [rullerzhou-afk/clawd-on-desk](htt
 
 ## Installation
 ### Arch Linux and family
-Two AUR packages are planned but not published yet:
+AUR packages are planned but not published yet:
 - `crab-on-desk-git`: the widget, the Claude Code hook, the settings window and `crab-codex`.
 
 ### From source
@@ -20,6 +20,7 @@ Build and install the binaries into `~/.local/bin` (run as root to install into 
 git clone https://github.com/Supernovatux/crab-on-desk.git
 cd crab-on-desk
 make install
+make themes-install # for source themes
 ```
 Make sure `~/.local/bin` is on your `PATH`.
 
@@ -72,7 +73,7 @@ This repository does not contain any themes.
 
 You can use pets from [codex-pets.net](https://codex-pets.net). Install one with its page link or id:
 ```sh
-crab-codex https://codex-pets.net/pets/<id>
+crab-codex <pet_name>
 ```
 The pets belong to their creators; `crab-codex` only downloads them for your own use.
 
@@ -80,7 +81,6 @@ The themes of the original project are not licensed under an open-source license
 ```sh
 make themes-install
 ```
-Leave out `CLAWD_ON_DESK` to let `make` clone the project into `build/`.
 
 ## AI usage
 I wanted to make this widget to get an feel of OpenGL. I wrote all the code up to the point where the first animation worked. After that, all code was written by Claude Opus 5.5. I did monitor the edits partly.

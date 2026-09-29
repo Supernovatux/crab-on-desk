@@ -138,6 +138,7 @@ impl State {
 
 struct Session {
     state: State,
+    resting: State,
     subagents: BTreeSet<String>,
     spawning: bool,
     pid: Option<u32>,
@@ -445,6 +446,7 @@ impl StateMachine {
         for session in self.sessions.values_mut() {
             if session.stale_at().is_some_and(|at| now >= at) {
                 session.state = State::Idle;
+                session.resting = State::Idle;
                 session.clear_subagents();
                 session.updated = now;
                 changed = true;
@@ -575,6 +577,7 @@ impl StateMachine {
         }
         let session = self.sessions.entry(key).or_insert_with(|| Session {
             state: State::Idle,
+            resting: State::Idle,
             subagents: BTreeSet::new(),
             spawning: false,
             pid: None,
@@ -604,14 +607,14 @@ impl StateMachine {
                     }
                     None => session.spawning = true,
                 }
-                (State::Juggling, None)
+                (session.resting, None)
             }
             EventKind::SubagentStop { id } => {
                 if let Some(id) = id {
                     session.subagents.remove(id);
                 }
                 session.spawning = false;
-                (State::Working, None)
+                (session.resting, None)
             }
             EventKind::Stop => {
                 session.clear_subagents();
@@ -624,6 +627,7 @@ impl StateMachine {
             | EventKind::PermissionRequest { .. } => (State::Idle, Some(State::Notification)),
             EventKind::WorktreeCreate => (State::Idle, Some(State::Carrying)),
         };
+        session.resting = state;
         session.state = if session.subagent_count() > 0 {
             State::Juggling
         } else {
@@ -979,6 +983,28 @@ mod tests {
             },
         );
         assert_eq!(machine.on_event(&stop_x, start), Some(Animations::Juggling));
+    }
+
+    #[test]
+    fn subagent_after_stop_returns_to_idle() {
+        let start = Instant::now();
+        let mut machine = StateMachine::new(behaviour(), BTreeMap::new(), false, start);
+        machine.on_event(&event("a", EventKind::ToolStart), start);
+        machine.on_event(&event("a", EventKind::Stop), after(start, 1000));
+        machine.on_deadline(after(start, 10_000), 0);
+        assert_eq!(machine.animation(), Animations::Idle);
+        let id = Some("recap".to_owned());
+        machine.on_event(
+            &event("a", EventKind::SubagentStart { id: id.clone() }),
+            after(start, 20_000),
+        );
+        assert_eq!(machine.animation(), Animations::Juggling);
+        machine.on_event(
+            &event("a", EventKind::SubagentStop { id }),
+            after(start, 30_000),
+        );
+        machine.on_deadline(after(start, 40_000), 0);
+        assert_eq!(machine.animation(), Animations::Idle);
     }
 
     #[test]

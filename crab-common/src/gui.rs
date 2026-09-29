@@ -21,6 +21,7 @@ pub const PERMISSION_MODE: &str = "perm";
 pub const INIT_MODE: &str = "init";
 pub const DISPLAYS_PAGE: &str = "displays";
 pub const SETTINGS_LOCK: &str = "crab-on-desk-settings.lock";
+pub const WIDGET_LOCK: &str = "crab-on-desk-widget.lock";
 pub const SETTINGS_APP_ID: &str = "com.supernovatux.CrabOnDesk";
 pub const PERMISSION_APP_ID: &str = "com.supernovatux.CrabOnDesk.Permission";
 pub const GENERATE_COMMAND: &str = "generate";

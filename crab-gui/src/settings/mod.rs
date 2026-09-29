@@ -19,11 +19,9 @@ mod style;
 mod view;
 
 use std::{
-    fs::{File, TryLockError},
+    fs::File,
     io,
-    os::unix::process::CommandExt,
     path::PathBuf,
-    process::{Command, Stdio},
 };
 
 use crab_common::{
@@ -31,13 +29,13 @@ use crab_common::{
     control::{Control, Message as WidgetMessage},
     dirs::{CommonError, get_settings_lock, get_sibling_executable},
     gui::{SETTINGS_APP_ID, WIDGET_BINARY},
-    hooks, ipc,
+    hooks, ipc, process,
 };
 use iced::{Size, Task, window};
 use snafu::{ResultExt, Snafu};
 
 use crate::{
-    desktop::{self, Desktop, Output},
+    outputs::{self, Output},
     theme,
 };
 use catalog::ThemeEntry;
@@ -110,7 +108,6 @@ struct Settings {
     free_roam: bool,
     themes: Vec<ThemeEntry>,
     hooks: Hooks,
-    desktop: Option<Box<dyn Desktop>>,
     outputs: Result<Vec<Output>, String>,
     toast: Option<Toast>,
 }
@@ -145,12 +142,7 @@ pub fn run(config: Option<Config>, page: Page) -> Result<(), SettingsError> {
 
 fn lock() -> Result<Option<File>, SettingsError> {
     let path = get_settings_lock()?;
-    let file = File::create(&path).context(LockSnafu { path: &path })?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(source)) => Err(SettingsError::Lock { source, path }),
-    }
+    process::try_lock(&path).context(LockSnafu { path })
 }
 
 #[cfg(target_os = "linux")]
@@ -183,11 +175,7 @@ fn start_widget() -> Result<(), String> {
         return Ok(());
     }
     let program = get_sibling_executable(WIDGET_BINARY).map_err(report)?;
-    Command::new(&program)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
+    process::detached(&program)
         .spawn()
         .map_err(|error| format!("Unable to start {}: {error}", program.display()))?;
     Ok(())
@@ -195,7 +183,6 @@ fn start_widget() -> Result<(), String> {
 
 impl Settings {
     fn new(colors: &'static Colors, config: Option<Config>, page: Page) -> Self {
-        let desktop = desktop::detect();
         let mode = if config.is_some() {
             Mode::Settings
         } else {
@@ -210,7 +197,6 @@ impl Settings {
             themes: Vec::new(),
             hooks: Hooks::Missing,
             outputs: Ok(Vec::new()),
-            desktop,
             toast: None,
         };
         settings.refresh_themes();
@@ -327,9 +313,7 @@ impl Settings {
     }
 
     fn refresh_outputs(&mut self) {
-        if let Some(desktop) = &self.desktop {
-            self.outputs = desktop.outputs().map_err(report);
-        }
+        self.outputs = outputs::list().map_err(report);
     }
 
     fn say(&mut self, text: impl Into<String>) {

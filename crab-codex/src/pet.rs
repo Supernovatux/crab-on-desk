@@ -62,6 +62,8 @@ struct Manifest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     Idle,
+    RunningRight,
+    RunningLeft,
     Waving,
     Jumping,
     Failed,
@@ -74,6 +76,8 @@ impl Row {
     const fn index(self) -> u32 {
         match self {
             Self::Idle => 0,
+            Self::RunningRight => 1,
+            Self::RunningLeft => 2,
             Self::Waving => 3,
             Self::Jumping => 4,
             Self::Failed => 5,
@@ -86,6 +90,7 @@ impl Row {
     pub const fn durations_ms(self) -> &'static [u32] {
         match self {
             Self::Idle => &[280, 110, 110, 140, 140, 320],
+            Self::RunningRight | Self::RunningLeft => &[120, 120, 120, 120, 120, 120, 120, 220],
             Self::Waving => &[140, 140, 140, 280],
             Self::Jumping => &[140, 140, 140, 140, 280],
             Self::Failed => &[140, 140, 140, 140, 140, 140, 140, 240],

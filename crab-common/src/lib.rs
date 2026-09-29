@@ -23,4 +23,5 @@ pub mod dirs;
 pub mod gui;
 pub mod hooks;
 pub mod ipc;
+pub mod process;
 pub mod toml_file;

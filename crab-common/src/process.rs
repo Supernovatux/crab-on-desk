@@ -14,36 +14,30 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::env;
-
-use hyprland::{
-    dispatch::{Dispatch, DispatchType, WindowIdentifier},
-    error::HyprError,
+use std::{
+    fs::{File, TryLockError},
+    io,
+    os::unix::process::CommandExt,
+    path::Path,
+    process::{Command, Stdio},
 };
-use snafu::{ResultExt, Snafu};
-
-const HYPRLAND_INSTANCE: &str = "HYPRLAND_INSTANCE_SIGNATURE";
-
-#[derive(Debug, Snafu)]
-pub enum DesktopError {
-    #[snafu(display("Hyprland could not focus the window of process {pid}"))]
-    Focus { source: HyprError, pid: u32 },
-}
-
-pub trait Desktop {
-    fn focus(&self, pid: u32) -> Result<(), DesktopError>;
-}
-
-struct Hyprland;
-
-impl Desktop for Hyprland {
-    fn focus(&self, pid: u32) -> Result<(), DesktopError> {
-        Dispatch::call(DispatchType::FocusWindow(WindowIdentifier::ProcessId(pid)))
-            .context(FocusSnafu { pid })
-    }
-}
 
 #[must_use]
-pub fn detect() -> Option<Box<dyn Desktop>> {
-    env::var_os(HYPRLAND_INSTANCE).map(|_| Box::new(Hyprland) as Box<dyn Desktop>)
+pub fn detached(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    command
+}
+
+pub fn try_lock(path: &Path) -> io::Result<Option<File>> {
+    let file = File::create(path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(error),
+    }
 }
