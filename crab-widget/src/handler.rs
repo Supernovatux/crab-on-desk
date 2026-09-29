@@ -16,7 +16,8 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    os::unix::net::UnixStream,
+    os::unix::{net::UnixStream, process::CommandExt},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -30,6 +31,8 @@ use crab_common::{
     atlas::Animations,
     claude::CLAUDE_PROCESS,
     control::{Control, Message},
+    dirs::get_sibling_executable,
+    gui::{DISPLAYS_PAGE, GUI_BINARY, SETTINGS_MODE},
 };
 use hyprland::{data::CursorPosition, shared::HyprData};
 use rustix::{
@@ -85,6 +88,7 @@ struct Handler {
     watched: HashSet<u32>,
     prompts: HashMap<u64, Prompt>,
     next_prompt: u64,
+    settings: HashMap<u32, Child>,
     roaming: bool,
     cursor: Cursor,
     running: bool,
@@ -150,6 +154,7 @@ pub fn run(
             channel::Event::Msg(WindowEvent::Moved { center }) => {
                 handler.cursor.center = Some(center);
             }
+            channel::Event::Msg(WindowEvent::OpenSettings) => handler.open_settings(),
             channel::Event::Msg(WindowEvent::RoamEnded) => {
                 handler.roaming = false;
                 let animation = handler.state.end_roam(Instant::now());
@@ -171,6 +176,7 @@ pub fn run(
         watched: HashSet::new(),
         prompts: HashMap::new(),
         next_prompt: 0,
+        settings: HashMap::new(),
         roaming: false,
         cursor: Cursor::default(),
         running: true,
@@ -288,6 +294,40 @@ impl Handler {
             Watch::Watching(token) => self.add_prompt_watch(id, token),
             Watch::AlreadyExited => self.close_prompt(id),
             Watch::Unwatchable => {}
+        }
+    }
+
+    fn open_settings(&mut self) {
+        let spawned = get_sibling_executable(GUI_BINARY)
+            .map_err(|error| snafu::Report::from_error(error).to_string())
+            .and_then(|program| {
+                Command::new(&program)
+                    .args([SETTINGS_MODE, DISPLAYS_PAGE])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .process_group(0)
+                    .spawn()
+                    .map_err(|error| format!("Unable to start {}: {error}", program.display()))
+            });
+        let child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!("{error}");
+                return;
+            }
+        };
+        let pid = child.id();
+        self.settings.insert(pid, child);
+        let watch = self.on_exit(pid, move |handler| handler.reap_settings(pid));
+        if matches!(watch, Watch::AlreadyExited) {
+            self.reap_settings(pid);
+        }
+    }
+
+    fn reap_settings(&mut self, pid: u32) {
+        if let Some(mut child) = self.settings.remove(&pid) {
+            let _ = child.wait();
         }
     }
 

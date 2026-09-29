@@ -20,16 +20,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crab_common::{
-    atlas::{Animations, SOURCE_EXTENSION},
-    dirs::{CommonError, get_theme_sources},
-};
+use crab_common::atlas::{Animations, SOURCE_EXTENSION};
 use snafu::{OptionExt, ResultExt, Snafu};
 
 #[derive(Debug, Snafu)]
 pub enum ThemeError {
-    #[snafu(context(false))]
-    CheckFS { source: CommonError },
     #[snafu(display("Unable to list {path:?}"))]
     List { source: io::Error, path: PathBuf },
     #[snafu(display("{path:?} is not a UTF-8 file name"))]
@@ -47,9 +42,9 @@ pub struct Themes {
 }
 
 impl Themes {
-    pub fn new() -> Result<Self, ThemeError> {
+    pub fn new(sources: &Path) -> Result<Self, ThemeError> {
         let mut themes = HashMap::new();
-        for dir in list(&get_theme_sources()?)? {
+        for dir in list(sources)? {
             if dir.is_dir() {
                 themes.insert(utf8_name(dir.file_name(), &dir)?, animations(&dir)?);
             }

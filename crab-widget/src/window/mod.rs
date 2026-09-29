@@ -61,6 +61,7 @@ pub enum WindowEvent {
     Hover { inside: bool },
     Moved { center: (f64, f64) },
     RoamEnded,
+    OpenSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

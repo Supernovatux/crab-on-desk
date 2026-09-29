@@ -14,19 +14,27 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{env, io, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    env, fs, io, iter,
+    path::{Path, PathBuf},
+};
 
 use directories::{BaseDirs, ProjectDirs};
 use snafu::{ResultExt, Snafu};
 
 use crate::{
     agent::AGENT_SOCKET,
-    atlas::{Animations, BEHAVIOUR_FILE, MANIFEST_FILE},
+    atlas::{Animations, MANIFEST_FILE},
     claude::{CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR_VAR, CLAUDE_SETTINGS_FILE},
     config::CONFIG_FILE,
+    gui::SETTINGS_LOCK,
 };
 
+const APP_DIR: &str = "crab-on-desk";
 const THEMES_DIR: &str = "themes";
+const DATA_DIRS_VAR: &str = "XDG_DATA_DIRS";
+const DEFAULT_DATA_DIRS: &str = "/usr/local/share:/usr/share";
 
 #[derive(Debug, Snafu)]
 pub enum CommonError {
@@ -46,20 +54,18 @@ pub enum CommonError {
 }
 
 pub fn get_config() -> Result<PathBuf, CommonError> {
-    let dir = ProjectDirs::from("com", "supernovatux", "crab-on-desk")
-        .ok_or(CommonError::UnableToGetConfig)?;
+    let dir =
+        ProjectDirs::from("com", "supernovatux", APP_DIR).ok_or(CommonError::UnableToGetConfig)?;
     Ok(dir.config_local_dir().to_owned())
 }
-pub fn get_cache() -> Result<PathBuf, CommonError> {
-    let dir = ProjectDirs::from("com", "supernovatux", "crab-on-desk")
-        .ok_or(CommonError::UnableToGetCache)?;
-    Ok(dir.cache_dir().to_owned())
-}
-
 pub fn get_agent_socket() -> Result<PathBuf, CommonError> {
     let dirs = BaseDirs::new().ok_or(CommonError::UnableToGetRuntime)?;
     let runtime = dirs.runtime_dir().ok_or(CommonError::UnableToGetRuntime)?;
     Ok(runtime.join(AGENT_SOCKET))
+}
+
+pub fn get_settings_lock() -> Result<PathBuf, CommonError> {
+    Ok(get_agent_socket()?.with_file_name(SETTINGS_LOCK))
 }
 
 pub fn get_claude_settings() -> Result<PathBuf, CommonError> {
@@ -79,46 +85,55 @@ pub fn get_sibling_executable(name: &str) -> Result<PathBuf, CommonError> {
         .with_file_name(name))
 }
 
-pub fn get_theme_sources() -> Result<PathBuf, CommonError> {
-    Ok(get_config()?.join(THEMES_DIR))
-}
-
-pub fn get_theme_source(theme: &str) -> Result<PathBuf, CommonError> {
-    Ok(get_theme_sources()?.join(theme))
-}
-
-pub fn get_animation_source(theme: &str, animation: Animations) -> Result<PathBuf, CommonError> {
-    let file = animation
-        .source_file()
-        .context(AnimationNameSnafu { animation })?;
-    Ok(get_theme_source(theme)?.join(file))
-}
-
-pub fn get_theme_behaviour(theme: &str) -> Result<PathBuf, CommonError> {
-    let mut path = get_theme_sources()?;
-    path.push(theme);
-    path.push(BEHAVIOUR_FILE);
-    Ok(path)
-}
-
-pub fn get_theme_cache(theme: &str) -> Result<PathBuf, CommonError> {
-    let mut dir = get_cache()?;
-    dir.push(THEMES_DIR);
-    dir.push(theme);
-    Ok(dir)
-}
-
 pub fn get_config_file() -> Result<PathBuf, CommonError> {
     Ok(get_config()?.join(CONFIG_FILE))
 }
 
-pub fn get_theme_manifest(theme: &str) -> Result<PathBuf, CommonError> {
-    Ok(get_theme_cache(theme)?.join(MANIFEST_FILE))
+pub fn get_user_themes() -> Result<PathBuf, CommonError> {
+    Ok(get_config()?.join(THEMES_DIR))
 }
 
-pub fn get_animation_texture(theme: &str, animation: Animations) -> Result<PathBuf, CommonError> {
+fn get_theme_roots() -> Result<Vec<PathBuf>, CommonError> {
+    let data_dirs = env::var_os(DATA_DIRS_VAR)
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| DEFAULT_DATA_DIRS.into());
+    let system = env::split_paths(&data_dirs)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(APP_DIR).join(THEMES_DIR));
+    Ok(iter::once(get_user_themes()?).chain(system).collect())
+}
+
+pub fn get_theme_dirs() -> Result<BTreeMap<String, PathBuf>, CommonError> {
+    let mut themes = BTreeMap::new();
+    for root in get_theme_roots()? {
+        for (name, dir) in built_themes(&root) {
+            themes.entry(name).or_insert(dir);
+        }
+    }
+    Ok(themes)
+}
+
+pub fn get_theme_dir(theme: &str) -> Result<Option<PathBuf>, CommonError> {
+    Ok(get_theme_dirs()?.remove(theme))
+}
+
+fn built_themes(root: &Path) -> Vec<(String, PathBuf)> {
+    fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|dir| dir.join(MANIFEST_FILE).is_file())
+        .filter_map(|dir| Some((dir.file_name()?.to_str()?.to_owned(), dir)))
+        .collect()
+}
+
+pub fn get_animation_texture(
+    theme_dir: &Path,
+    animation: Animations,
+) -> Result<PathBuf, CommonError> {
     let file = animation
         .texture_file()
         .context(AnimationNameSnafu { animation })?;
-    Ok(get_theme_cache(theme)?.join(file))
+    Ok(theme_dir.join(file))
 }

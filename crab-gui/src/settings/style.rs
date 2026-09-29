@@ -17,7 +17,7 @@
 use iced::{
     Background, Border, Color, Theme, color,
     theme::Palette,
-    widget::{button, container, rule, text_input, toggler},
+    widget::{button, container, rule, toggler},
 };
 
 use crate::theme::{Appearance, BRAND, Scheme, outline};
@@ -31,8 +31,6 @@ const BADGE_RADIUS: f32 = 8.0;
 const TOAST_RADIUS: f32 = 10.0;
 const ACCENT_TINT: f32 = 0.1;
 const ACCENT_EDGE: f32 = 0.24;
-const DANGER_TINT: f32 = 0.08;
-const DANGER_EDGE: f32 = 0.35;
 const DISABLED_OPACITY: f32 = 0.5;
 const SWITCH_PADDING_RATIO: f32 = 2.0 / 24.0;
 
@@ -104,7 +102,6 @@ const LIGHT: Colors = Colors {
 pub enum Tone {
     Plain,
     Accent,
-    Danger,
 }
 
 #[must_use]
@@ -180,7 +177,6 @@ pub fn thumb(colors: &Colors) -> container::Style {
 pub fn badge(colors: &Colors, theme: &Theme, tone: Tone) -> container::Style {
     let (text, background) = match tone {
         Tone::Accent => (accent(theme), tinted(accent(theme), ACCENT_TINT)),
-        Tone::Danger => (colors.danger, tinted(colors.danger, DANGER_TINT)),
         Tone::Plain => (colors.text_tertiary, colors.row_border),
     };
     container::Style {
@@ -242,14 +238,8 @@ pub fn soft(colors: &Colors, theme: &Theme, tone: Tone, status: button::Status) 
             tinted(accent, ACCENT_TINT),
             tinted(accent, ACCENT_EDGE),
         ),
-        Tone::Danger => (
-            colors.danger,
-            tinted(colors.danger, DANGER_TINT),
-            tinted(colors.danger, DANGER_EDGE),
-        ),
     };
     let edge = match (tone, status) {
-        (Tone::Danger, button::Status::Hovered | button::Status::Pressed) => colors.danger,
         (_, button::Status::Hovered | button::Status::Pressed) => accent,
         _ => edge,
     };
@@ -284,23 +274,6 @@ pub fn switch(colors: &Colors, theme: &Theme, status: toggler::Status) -> toggle
         text_color: None,
         border_radius: None,
         padding_ratio: SWITCH_PADDING_RATIO,
-    }
-}
-
-#[must_use]
-pub fn input(colors: &Colors, theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let edge = if matches!(status, text_input::Status::Focused { .. }) {
-        accent(theme)
-    } else {
-        colors.border
-    };
-    text_input::Style {
-        background: Background::Color(colors.background),
-        border: outline(edge, BUTTON_RADIUS),
-        icon: colors.text_tertiary,
-        placeholder: colors.text_tertiary,
-        value: colors.text,
-        selection: tinted(accent(theme), ACCENT_EDGE),
     }
 }
 

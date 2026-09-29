@@ -14,16 +14,17 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 use crab_common::{
-    gui::{GENERATE_COMMAND, IMPORT_COMMAND, INSTALL_HOOKS_COMMAND, UNINSTALL_HOOKS_COMMAND},
+    gui::{GENERATE_COMMAND, INSTALL_HOOKS_COMMAND, UNINSTALL_HOOKS_COMMAND},
     hooks::{self, HooksError},
 };
 use crab_settings::{
     atlas::{AtlasError, gen_atlas},
-    config::{ConfigError, write_default_if_missing},
-    import::{ImportError, import},
     themes::{ThemeError, Themes},
 };
 use snafu::{self, OptionExt, Snafu};
@@ -37,16 +38,10 @@ enum MainError {
     Atlas { source: AtlasError },
 
     #[snafu(context(false))]
-    Config { source: ConfigError },
-
-    #[snafu(context(false))]
     Hooks { source: HooksError },
 
-    #[snafu(context(false))]
-    Import { source: ImportError },
-
     #[snafu(display(
-        "Usage: crab-settings [{GENERATE_COMMAND} [theme...] | {IMPORT_COMMAND} <reference-repo> [theme...] | {INSTALL_HOOKS_COMMAND} | {UNINSTALL_HOOKS_COMMAND}]"
+        "Usage: crab-settings {GENERATE_COMMAND} <apng-dir> <out-dir> [theme...] | {INSTALL_HOOKS_COMMAND} | {UNINSTALL_HOOKS_COMMAND}"
     ))]
     Usage,
 }
@@ -55,21 +50,19 @@ enum MainError {
 fn main() -> Result<(), MainError> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
-        None => generate(&[]),
-        Some(GENERATE_COMMAND) => generate(&args.collect::<Vec<_>>()),
-        Some(IMPORT_COMMAND) => {
-            let reference = PathBuf::from(args.next().context(UsageSnafu)?);
-            let themes = import(&reference, args.collect())?;
-            generate(&themes)
+        Some(GENERATE_COMMAND) => {
+            let sources = PathBuf::from(args.next().context(UsageSnafu)?);
+            let out = PathBuf::from(args.next().context(UsageSnafu)?);
+            generate(&sources, &out, &args.collect::<Vec<_>>())
         }
         Some(INSTALL_HOOKS_COMMAND) => Ok(hooks::install()?),
         Some(UNINSTALL_HOOKS_COMMAND) => Ok(hooks::uninstall()?),
-        Some(_) => Err(MainError::Usage),
+        _ => Err(MainError::Usage),
     }
 }
 
-fn generate(selected: &[String]) -> Result<(), MainError> {
-    let themes = Themes::new()?;
+fn generate(sources: &Path, out: &Path, selected: &[String]) -> Result<(), MainError> {
+    let themes = Themes::new(sources)?;
     let mut names: Vec<&String> = themes
         .themes
         .keys()
@@ -78,8 +71,7 @@ fn generate(selected: &[String]) -> Result<(), MainError> {
     names.sort();
     for theme in names {
         println!("generating {theme}");
-        gen_atlas(theme, &themes)?;
+        gen_atlas(theme, &themes, sources, out)?;
     }
-    write_default_if_missing()?;
     Ok(())
 }

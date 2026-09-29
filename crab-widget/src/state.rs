@@ -21,7 +21,7 @@ use std::{
 
 use crab_common::{
     agent::{Agent, AgentEvent, CompactTrigger, EventKind},
-    atlas::{Animations, ThemeBehaviour, Tier},
+    atlas::{Animations, SleepMode, ThemeBehaviour, Tier},
 };
 
 use crate::{clicks::Gesture, window::Side};
@@ -393,6 +393,11 @@ impl StateMachine {
             State::Yawning | State::Dozing => {
                 self.apply(self.resolve(), now);
             }
+            State::Collapsing | State::Sleeping
+                if self.behaviour.sleep.mode == SleepMode::Direct =>
+            {
+                self.apply(self.resolve(), now);
+            }
             State::Collapsing | State::Sleeping => {
                 self.apply(State::Waking, now);
             }
@@ -522,7 +527,11 @@ impl StateMachine {
         let sleep = self.behaviour.sleep;
         match self.shown.state {
             State::Idle if now >= still + millis(sleep.yawn_after_ms) => {
-                self.apply(State::Yawning, now);
+                let next = match sleep.mode {
+                    SleepMode::Full => State::Yawning,
+                    SleepMode::Direct => State::Sleeping,
+                };
+                self.apply(next, now);
             }
             State::Idle
                 if self.overlay.is_none()
@@ -1039,6 +1048,7 @@ mod tests {
                 },
             ],
             sleep: SleepTimings {
+                mode: SleepMode::Full,
                 idle_after_ms: 20_000,
                 yawn_after_ms: 60_000,
                 deep_sleep_after_ms: 600_000,
@@ -1069,6 +1079,25 @@ mod tests {
             Some((after(start, 33_500), Some(Animations::Idle)))
         );
         assert_eq!(machine.deadline(), Some(after(start, 60_000)));
+    }
+
+    #[test]
+    fn direct_sleep_skips_yawning_and_waking() {
+        let start = Instant::now();
+        let mut behaviour = sleepy();
+        behaviour.idle_pool.clear();
+        behaviour.sleep.mode = SleepMode::Direct;
+        let mut machine = StateMachine::new(behaviour, BTreeMap::new(), false, start);
+        machine.on_user_idle(start);
+        assert_eq!(
+            step(&mut machine, 0),
+            Some((after(start, 60_000), Some(Animations::Sleeping)))
+        );
+        assert_eq!(machine.deadline(), None);
+        assert_eq!(
+            machine.on_user_active(after(start, 700_000)),
+            Some(Animations::Idle)
+        );
     }
 
     #[test]

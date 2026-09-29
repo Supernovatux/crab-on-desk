@@ -17,8 +17,8 @@
 use std::{collections::BTreeMap, fs, io, path::PathBuf, time::Duration};
 
 use crab_common::{
-    atlas::{Animations, Rect, ThemeBehaviour, ThemeManifest},
-    dirs::{CommonError, get_animation_texture, get_theme_manifest},
+    atlas::{Animations, MANIFEST_FILE, Rect, ThemeBehaviour, ThemeManifest},
+    dirs::{CommonError, get_animation_texture},
     toml_file::{self, TomlFileError},
 };
 use ktx2::{Format, Reader};
@@ -46,7 +46,7 @@ pub enum ThemeError {
 }
 
 pub struct Theme {
-    name: String,
+    dir: PathBuf,
     manifest: ThemeManifest,
 }
 
@@ -61,9 +61,9 @@ pub struct Animation {
 }
 
 impl Theme {
-    pub fn load(name: String) -> Result<Self, ThemeError> {
-        let manifest = toml_file::read(get_theme_manifest(&name)?)?;
-        Ok(Self { name, manifest })
+    pub fn load(dir: PathBuf) -> Result<Self, ThemeError> {
+        let manifest = toml_file::read(dir.join(MANIFEST_FILE))?;
+        Ok(Self { dir, manifest })
     }
 
     #[must_use]
@@ -94,7 +94,7 @@ impl Theme {
             .animations
             .get(&animation)
             .context(MissingSnafu { animation })?;
-        let path = get_animation_texture(&self.name, animation)?;
+        let path = get_animation_texture(&self.dir, animation)?;
         let bytes = fs::read(&path).context(ReadSnafu { path: path.clone() })?;
         let reader = Reader::new(bytes.as_slice()).context(Ktx2Snafu { path: path.clone() })?;
         let header = reader.header();
@@ -114,7 +114,7 @@ impl Theme {
                 && header.supercompression_scheme.is_none()
                 && header.pixel_width == info.width
                 && header.pixel_height == info.height
-                && header.layer_count == info.frame_count
+                && header.layer_count.max(1) == info.frame_count
                 && header.face_count == 1
                 && header.level_count == 1
                 && level.data.len() as u64 == frame_bytes * u64::from(info.frame_count)

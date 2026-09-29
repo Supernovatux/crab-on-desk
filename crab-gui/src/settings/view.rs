@@ -19,11 +19,11 @@ use iced::{
     widget::{
         Column, button, column, container, grid, image, mouse_area, row, rule, scrollable,
         scrollable::{Direction, Scrollbar},
-        space, text, text_input, toggler,
+        space, text, toggler,
     },
 };
 
-use super::{Hooks, Message, Page, Settings, catalog::ThemeEntry, style, style::Tone};
+use super::{Hooks, Message, Mode, Page, Settings, catalog::ThemeEntry, style, style::Tone};
 use crate::theme::{BOLD, MEDIUM, SEMIBOLD};
 
 const SIDEBAR_WIDTH: f32 = 200.0;
@@ -59,6 +59,12 @@ const DESCRIPTION_SIZE: u32 = 11;
 const BUTTON_SIZE: u32 = 12;
 const BADGE_SIZE: u32 = 10;
 
+const SETUP_TITLE: &str = "Welcome to Crab on Desk";
+const SETUP_SUBTITLE: &str =
+    "Pick a theme to get started. Everything here can be changed later in Settings.";
+const NO_THEMES: &str =
+    "Install the crab-on-desk-themes package, or run make themes-install from a checkout.";
+
 impl Page {
     const fn label(self) -> &'static str {
         match self {
@@ -72,7 +78,7 @@ impl Page {
     const fn subtitle(self) -> &'static str {
         match self {
             Self::General => "How the crab behaves on your desktop.",
-            Self::Theme => "Choose, import and regenerate the crab's look.",
+            Self::Theme => "Choose and regenerate the crab's look.",
             Self::Claude => "Hooks that let Claude Code drive the crab and ask for permissions.",
             Self::Displays => "Choose which screen the crab lives on.",
         }
@@ -81,22 +87,31 @@ impl Page {
 
 impl Settings {
     pub(super) fn view(&self) -> Element<'_, Message> {
+        let (title, subtitle, body) = match (self.mode, self.page) {
+            (Mode::Setup, _) => (SETUP_TITLE, SETUP_SUBTITLE, self.setup()),
+            (Mode::Settings, Page::General) => {
+                (self.page.label(), self.page.subtitle(), self.general())
+            }
+            (Mode::Settings, Page::Theme) => {
+                (self.page.label(), self.page.subtitle(), self.themes())
+            }
+            (Mode::Settings, Page::Claude) => {
+                (self.page.label(), self.page.subtitle(), self.claude())
+            }
+            (Mode::Settings, Page::Displays) => {
+                (self.page.label(), self.page.subtitle(), self.displays())
+            }
+        };
         let content = column![
-            text(self.page.label())
+            text(title)
                 .size(TITLE_SIZE)
                 .font(BOLD)
                 .color(self.colors.text),
-            text(self.page.subtitle())
+            text(subtitle)
                 .size(SUBTITLE_SIZE)
                 .color(self.colors.text_secondary),
         ]
         .spacing(TITLE_GAP);
-        let body = match self.page {
-            Page::General => self.general(),
-            Page::Theme => self.themes(),
-            Page::Claude => self.claude(),
-            Page::Displays => self.displays(),
-        };
         let page = scrollable(
             column![content, body]
                 .spacing(HEADER_GAP)
@@ -113,7 +128,24 @@ impl Settings {
             .width(Fill)
             .height(Fill)
             .style(move |_| style::panel(colors));
-        row![self.sidebar(), panel].into()
+        match self.mode {
+            Mode::Setup => panel.into(),
+            Mode::Settings => row![self.sidebar(), panel].into(),
+        }
+    }
+
+    fn setup(&self) -> Element<'_, Message> {
+        let finish = row![
+            space().width(Fill),
+            self.soft(
+                "Finish",
+                Tone::Accent,
+                self.theme.is_some().then_some(Message::Finish),
+            ),
+        ];
+        column![self.themes(), self.general(), self.claude(), finish]
+            .spacing(SECTION_GAP)
+            .into()
     }
 
     fn sidebar(&self) -> Element<'_, Message> {
@@ -137,7 +169,6 @@ impl Settings {
 
     fn general(&self) -> Element<'_, Message> {
         let colors = self.colors;
-        let free_roam = self.config.as_ref().map(|config| config.free_roam);
         section(
             self,
             "Behaviour",
@@ -145,11 +176,9 @@ impl Settings {
                 self.row(
                     "Free roam",
                     Some("Walk around the screen while idle."),
-                    toggler(free_roam.unwrap_or_default())
+                    toggler(self.free_roam)
                         .size(SWITCH_SIZE)
-                        .on_toggle_maybe(
-                            free_roam.map(|_| Message::FreeRoam as fn(bool) -> Message),
-                        )
+                        .on_toggle(Message::FreeRoam)
                         .style(move |theme, status| style::switch(colors, theme, status))
                         .into(),
                 ),
@@ -158,15 +187,11 @@ impl Settings {
     }
 
     fn themes(&self) -> Element<'_, Message> {
-        let installed = if self.themes.is_empty() {
+        if self.themes.is_empty() {
             section(
                 self,
                 "Themes",
-                vec![self.row(
-                    "No themes yet",
-                    Some("Import them from a clawd-on-desk checkout below."),
-                    space().into(),
-                )],
+                vec![self.row("No themes installed", Some(NO_THEMES), space().into())],
             )
         } else {
             column![
@@ -178,40 +203,7 @@ impl Settings {
             ]
             .spacing(SECTION_TITLE_GAP)
             .into()
-        };
-        let reference = self.reference.trim();
-        let colors = self.colors;
-        let import = row![
-            text_input("/path/to/clawd-on-desk", &self.reference)
-                .size(BUTTON_SIZE)
-                .padding(BUTTON_PADDING)
-                .on_input(Message::ReferenceChanged)
-                .style(move |theme, status| style::input(colors, theme, status)),
-            self.soft(
-                "Import",
-                Tone::Accent,
-                (!reference.is_empty() && self.job.is_none()).then_some(Message::Import),
-            ),
-        ]
-        .spacing(CARD_INNER_GAP)
-        .align_y(Alignment::Center);
-        let mut rows = vec![
-            self.row(
-                "Import from clawd-on-desk",
-                Some(
-                    "Renders every theme of a clawd-on-desk checkout with Electron, then \
-                     generates the textures. Takes several minutes.",
-                ),
-                space().into(),
-            ),
-            container(import).padding(ROW_PADDING).into(),
-        ];
-        if let Some(job) = &self.job {
-            rows.push(self.row(job, None, space().into()));
         }
-        column![installed, section(self, "Import", rows)]
-            .spacing(SECTION_GAP)
-            .into()
     }
 
     fn theme_card<'a>(&'a self, theme: &'a ThemeEntry) -> Element<'a, Message> {
@@ -227,13 +219,7 @@ impl Settings {
                     .into()
             },
         );
-        let badge = if active {
-            Some(("Active", Tone::Accent))
-        } else if theme.generated {
-            None
-        } else {
-            Some(("Not generated", Tone::Plain))
-        };
+        let badge = active.then_some(("Active", Tone::Accent));
         let name = row![
             text(&theme.name)
                 .size(BODY_SIZE)
@@ -247,7 +233,6 @@ impl Settings {
         }))
         .spacing(CARD_INNER_GAP / 4 * 3)
         .align_y(Alignment::Center);
-        let selectable = theme.generated && !active && self.job.is_none();
         let preview = button(
             column![
                 container(thumbnail)
@@ -260,32 +245,8 @@ impl Settings {
         )
         .padding(0)
         .style(|_, _| button::Style::default())
-        .on_press_maybe(selectable.then(|| Message::SelectTheme(theme.name.clone())));
-        let idle = self.job.is_none();
-        let confirming = self.deleting.as_deref() == Some(theme.name.as_str());
-        let delete = if confirming {
-            self.soft(
-                "Confirm delete",
-                Tone::Danger,
-                Some(Message::Delete(theme.name.clone())),
-            )
-        } else {
-            self.soft(
-                "Delete",
-                Tone::Danger,
-                (idle && !active).then(|| Message::ConfirmDelete(theme.name.clone())),
-            )
-        };
-        let actions = row![
-            self.soft(
-                "Regenerate",
-                Tone::Plain,
-                idle.then(|| Message::Regenerate(theme.name.clone())),
-            ),
-            delete,
-        ]
-        .spacing(CARD_INNER_GAP);
-        container(column![preview, actions].spacing(CARD_INNER_GAP))
+        .on_press_maybe((!active).then(|| Message::SelectTheme(theme.name.clone())));
+        container(preview)
             .padding(CARD_PADDING)
             .width(Fill)
             .style(move |theme| style::card(colors, theme, active))

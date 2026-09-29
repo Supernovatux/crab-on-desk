@@ -22,6 +22,7 @@ pub const MANIFEST_FILE: &str = "meta.toml";
 pub const TEXTURE_EXTENSION: &str = "ktx2";
 pub const SOURCE_EXTENSION: &str = "apng";
 pub const BEHAVIOUR_FILE: &str = "theme.toml";
+pub const THUMBNAIL_FILE: &str = "thumbnail.png";
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -116,8 +117,18 @@ pub struct IdleAnimation {
     pub duration_ms: u32,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SleepMode {
+    #[default]
+    Full,
+    Direct,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct SleepTimings {
+    #[serde(default)]
+    pub mode: SleepMode,
     pub idle_after_ms: u32,
     pub yawn_after_ms: u32,
     pub deep_sleep_after_ms: u32,
@@ -183,10 +194,6 @@ impl Animations {
         )
     }
 
-    pub fn source_file(&self) -> Result<String, serde_plain::Error> {
-        serde_plain::to_string(self).map(|name| format!("{name}.{SOURCE_EXTENSION}"))
-    }
-
     pub fn texture_file(&self) -> Result<String, serde_plain::Error> {
         serde_plain::to_string(self).map(|name| format!("{name}.{TEXTURE_EXTENSION}"))
     }
@@ -198,4 +205,36 @@ impl FromStr for Animations {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         serde_plain::from_str(s)
     }
+}
+
+pub fn premultiply_alpha(pixels: &mut [u8]) {
+    let (pixels, _) = pixels.as_chunks_mut::<4>();
+    for [r, g, b, a] in pixels {
+        let alpha = u32::from(*a);
+        *r = (u32::from(*r) * alpha / 255) as u8;
+        *g = (u32::from(*g) * alpha / 255) as u8;
+        *b = (u32::from(*b) * alpha / 255) as u8;
+    }
+}
+
+pub fn opaque_bounds<'a>(width: u32, frames: impl IntoIterator<Item = &'a [u8]>) -> Rect {
+    let opaque = frames.into_iter().flat_map(|frame| {
+        let (pixels, _) = frame.as_chunks::<4>();
+        pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, [.., alpha])| *alpha > 0)
+            .map(move |(index, _)| (index as u32 % width, index as u32 / width))
+    });
+    let bounds = opaque.fold(None, |bounds: Option<(u32, u32, u32, u32)>, (x, y)| {
+        Some(bounds.map_or((x, y, x, y), |(left, top, right, bottom)| {
+            (left.min(x), top.min(y), right.max(x), bottom.max(y))
+        }))
+    });
+    bounds.map_or_else(Rect::default, |(left, top, right, bottom)| Rect {
+        x: left,
+        y: top,
+        width: right - left + 1,
+        height: bottom - top + 1,
+    })
 }

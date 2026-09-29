@@ -15,12 +15,14 @@
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub const GUI_BINARY: &str = "crab-gui";
+pub const WIDGET_BINARY: &str = "crab-widget";
 pub const SETTINGS_MODE: &str = "settings";
 pub const PERMISSION_MODE: &str = "perm";
+pub const INIT_MODE: &str = "init";
+pub const DISPLAYS_PAGE: &str = "displays";
+pub const SETTINGS_LOCK: &str = "crab-on-desk-settings.lock";
 pub const SETTINGS_APP_ID: &str = "com.supernovatux.CrabOnDesk";
 pub const PERMISSION_APP_ID: &str = "com.supernovatux.CrabOnDesk.Permission";
-pub const SETTINGS_BINARY: &str = "crab-settings";
 pub const GENERATE_COMMAND: &str = "generate";
-pub const IMPORT_COMMAND: &str = "import";
 pub const INSTALL_HOOKS_COMMAND: &str = "install-hooks";
 pub const UNINSTALL_HOOKS_COMMAND: &str = "uninstall-hooks";

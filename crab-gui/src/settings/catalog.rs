@@ -14,68 +14,29 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    fs,
-    io::{self, ErrorKind},
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use crab_common::{
-    atlas::Animations,
-    dirs::{
-        CommonError, get_animation_source, get_theme_cache, get_theme_manifest, get_theme_source,
-        get_theme_sources,
-    },
+    atlas::THUMBNAIL_FILE,
+    dirs::{CommonError, get_theme_dirs},
 };
 use iced::widget::image::Handle;
 use image::ImageReader;
-use snafu::{ResultExt, Snafu};
-
-#[derive(Debug, Snafu)]
-pub enum CatalogError {
-    #[snafu(context(false))]
-    Dir { source: CommonError },
-    #[snafu(display("Unable to list {path:?}"))]
-    List { source: io::Error, path: PathBuf },
-    #[snafu(display("Unable to delete {path:?}"))]
-    Delete { source: io::Error, path: PathBuf },
-}
 
 #[derive(Debug, Clone)]
 pub struct ThemeEntry {
     pub name: String,
-    pub generated: bool,
     pub thumbnail: Option<Handle>,
 }
 
-pub fn list() -> Result<Vec<ThemeEntry>, CatalogError> {
-    let dir = get_theme_sources()?;
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error).context(ListSnafu { path: dir }),
-    };
-    let mut themes = entries
-        .flatten()
-        .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .map(entry)
-        .collect::<Result<Vec<_>, _>>()?;
-    themes.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(themes)
-}
-
-pub fn delete(theme: &str) -> Result<(), CatalogError> {
-    remove(&get_theme_source(theme)?)?;
-    remove(&get_theme_cache(theme)?)
-}
-
-fn entry(name: String) -> Result<ThemeEntry, CatalogError> {
-    Ok(ThemeEntry {
-        generated: get_theme_manifest(&name)?.is_file(),
-        thumbnail: thumbnail(&get_animation_source(&name, Animations::default())?),
-        name,
-    })
+pub fn list() -> Result<Vec<ThemeEntry>, CommonError> {
+    Ok(get_theme_dirs()?
+        .into_iter()
+        .map(|(name, dir)| ThemeEntry {
+            thumbnail: thumbnail(&dir.join(THUMBNAIL_FILE)),
+            name,
+        })
+        .collect())
 }
 
 fn thumbnail(path: &Path) -> Option<Handle> {
@@ -91,13 +52,4 @@ fn thumbnail(path: &Path) -> Option<Handle> {
         image.height(),
         image.into_raw(),
     ))
-}
-
-fn remove(path: &Path) -> Result<(), CatalogError> {
-    match fs::remove_dir_all(path) {
-        Err(error) if error.kind() != ErrorKind::NotFound => {
-            Err(error).context(DeleteSnafu { path })
-        }
-        _ => Ok(()),
-    }
 }

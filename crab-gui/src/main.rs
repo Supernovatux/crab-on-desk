@@ -16,7 +16,14 @@
 
 use std::env;
 
-use crab_common::gui::{PERMISSION_MODE, SETTINGS_MODE};
+use std::path::PathBuf;
+
+use crab_common::{
+    config::Config,
+    dirs::{CommonError, get_config_file},
+    gui::{DISPLAYS_PAGE, INIT_MODE, PERMISSION_MODE, SETTINGS_MODE},
+};
+use settings::Page;
 use snafu::Snafu;
 
 mod desktop;
@@ -30,15 +37,35 @@ enum GuiError {
     Permission { source: permission::PermissionError },
     #[snafu(context(false))]
     Settings { source: settings::SettingsError },
-    #[snafu(display("Usage: crab-gui [{SETTINGS_MODE} | {PERMISSION_MODE}]"))]
+    #[snafu(context(false))]
+    Dir { source: CommonError },
+    #[snafu(display(
+        "A valid config already exists at {path:?}; use `crab-gui {SETTINGS_MODE}` to change it"
+    ))]
+    Configured { path: PathBuf },
+    #[snafu(display(
+        "Usage: crab-gui [{SETTINGS_MODE} [{DISPLAYS_PAGE}] | {INIT_MODE} | {PERMISSION_MODE}]"
+    ))]
     Usage,
 }
 
 #[snafu::report]
 fn main() -> Result<(), GuiError> {
-    match env::args().nth(1).as_deref() {
-        None | Some(SETTINGS_MODE) => Ok(settings::run()?),
-        Some(PERMISSION_MODE) => Ok(permission::run()?),
-        Some(_) => UsageSnafu.fail(),
+    let args: Vec<String> = env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        [] | [SETTINGS_MODE] => Ok(settings::run(Config::load().ok(), Page::General)?),
+        [SETTINGS_MODE, DISPLAYS_PAGE] => Ok(settings::run(Config::load().ok(), Page::Displays)?),
+        [INIT_MODE] => {
+            if Config::load().is_ok() {
+                return ConfiguredSnafu {
+                    path: get_config_file()?,
+                }
+                .fail();
+            }
+            Ok(settings::run(None, Page::General)?)
+        }
+        [PERMISSION_MODE] => Ok(permission::run()?),
+        _ => UsageSnafu.fail(),
     }
 }

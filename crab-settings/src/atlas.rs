@@ -25,15 +25,15 @@ use std::{
 };
 
 use crab_common::{
-    atlas::{AnimationInfo, Animations, Rect, ThemeBehaviour, ThemeManifest},
-    dirs::{
-        CommonError, get_animation_texture, get_theme_behaviour, get_theme_cache,
-        get_theme_manifest,
+    atlas::{
+        AnimationInfo, Animations, BEHAVIOUR_FILE, MANIFEST_FILE, THUMBNAIL_FILE, ThemeBehaviour,
+        ThemeManifest, opaque_bounds, premultiply_alpha,
     },
     toml_file::{self, TomlFileError},
 };
 use image::{
-    AnimationDecoder, ImageError, RgbaImage, codecs::png::PngDecoder, metadata::LoopCount,
+    AnimationDecoder, ImageError, ImageReader, RgbaImage, codecs::png::PngDecoder,
+    metadata::LoopCount,
 };
 use ktx2_rw::{BasisCompressionParams, Ktx2Texture, TranscodeFormat, VkFormat};
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -52,13 +52,14 @@ pub enum AtlasError {
         source: ImageError,
         path: PathBuf,
     },
+    #[snafu(display("Unable to write the thumbnail {path:?}"))]
+    Thumbnail {
+        source: ImageError,
+        path: PathBuf,
+    },
     #[snafu(display("{path:?} has no frames"))]
     Empty {
         path: PathBuf,
-    },
-    #[snafu(context(false))]
-    Dir {
-        source: CommonError,
     },
     #[snafu(context(false))]
     Toml {
@@ -84,30 +85,47 @@ pub enum AtlasError {
     },
 }
 
-pub fn gen_atlas(theme: &str, themes: &Themes) -> Result<(), AtlasError> {
+pub fn gen_atlas(
+    theme: &str,
+    themes: &Themes,
+    sources: &Path,
+    out: &Path,
+) -> Result<(), AtlasError> {
     let theme_files = themes.themes.get(theme).ok_or(AtlasError::NotFound)?;
-    let behaviour: ThemeBehaviour = toml_file::read(get_theme_behaviour(theme)?)?;
+    let behaviour: ThemeBehaviour = toml_file::read(sources.join(theme).join(BEHAVIOUR_FILE))?;
     if let Some(animation) = behaviour
         .animations()
         .find(|animation| !theme_files.contains_key(animation))
     {
         return UnsourcedSnafu { theme, animation }.fail();
     }
-    let dir = get_theme_cache(theme)?;
+    let dir = out.join(theme);
     create_dir_all(&dir)?;
     let mut animations = BTreeMap::new();
     for (anim, path) in theme_files {
-        let info = encode_animation(path, &get_animation_texture(theme, *anim)?)?;
+        let info = encode_animation(path, &dir.join(anim.texture_file()?))?;
         animations.insert(*anim, info);
     }
+    if let Some(idle) = theme_files.get(&Animations::default()) {
+        write_thumbnail(idle, &dir.join(THUMBNAIL_FILE))?;
+    }
     fs::write(
-        get_theme_manifest(theme)?,
+        dir.join(MANIFEST_FILE),
         toml::to_string_pretty(&ThemeManifest {
             behaviour,
             animations,
         })?,
     )?;
     Ok(())
+}
+
+fn write_thumbnail(source: &Path, out: &Path) -> Result<(), AtlasError> {
+    ImageReader::open(source)?
+        .with_guessed_format()?
+        .decode()
+        .context(DecodeSnafu { path: source })?
+        .save(out)
+        .context(ThumbnailSnafu { path: out })
 }
 
 fn encode_animation(source: &Path, out: &Path) -> Result<AnimationInfo, AtlasError> {
@@ -131,20 +149,36 @@ fn encode_animation(source: &Path, out: &Path) -> Result<AnimationInfo, AtlasErr
         .first()
         .context(EmptySnafu { path: source })?
         .dimensions();
-    let frame_count = frames.len() as u32;
-    let hitbox = opaque_bounds(&frames);
+    let layers = frames
+        .into_iter()
+        .map(|frame| {
+            let mut data = frame.into_raw();
+            premultiply_alpha(&mut data);
+            data
+        })
+        .collect::<Vec<_>>();
+    encode_frames(width, height, &layers, frame_delays_ms, loops, out)
+}
 
+pub fn encode_frames(
+    width: u32,
+    height: u32,
+    premultiplied: &[Vec<u8>],
+    frame_delays_ms: Vec<u32>,
+    loops: bool,
+    out: &Path,
+) -> Result<AnimationInfo, AtlasError> {
+    let frame_count = premultiplied.len() as u32;
+    let hitbox = opaque_bounds(width, premultiplied.iter().map(Vec::as_slice));
     let mut texture =
         Ktx2Texture::create(width, height, 1, frame_count, 1, 1, VkFormat::R8G8B8A8_SRGB).context(
             Ktx2Snafu {
                 thing: "creating texture",
             },
         )?;
-    for (layer, frame) in frames.into_iter().enumerate() {
-        let mut data = frame.into_raw();
-        premultiply_alpha(&mut data);
+    for (layer, data) in premultiplied.iter().enumerate() {
         texture
-            .set_image_data(0, layer as u32, 0, &data)
+            .set_image_data(0, layer as u32, 0, data)
             .context(Ktx2Snafu {
                 thing: "writing frame",
             })?;
@@ -174,34 +208,4 @@ fn encode_animation(source: &Path, out: &Path) -> Result<AnimationInfo, AtlasErr
         loops,
         hitbox,
     })
-}
-
-fn opaque_bounds(frames: &[RgbaImage]) -> Rect {
-    let opaque = frames.iter().flat_map(|frame| {
-        frame
-            .enumerate_pixels()
-            .filter(|(_, _, pixel)| matches!(pixel.0, [.., alpha] if alpha > 0))
-            .map(|(x, y, _)| (x, y))
-    });
-    let bounds = opaque.fold(None, |bounds: Option<(u32, u32, u32, u32)>, (x, y)| {
-        Some(bounds.map_or((x, y, x, y), |(left, top, right, bottom)| {
-            (left.min(x), top.min(y), right.max(x), bottom.max(y))
-        }))
-    });
-    bounds.map_or_else(Rect::default, |(left, top, right, bottom)| Rect {
-        x: left,
-        y: top,
-        width: right - left + 1,
-        height: bottom - top + 1,
-    })
-}
-
-fn premultiply_alpha(pixels: &mut [u8]) {
-    let (pixels, _) = pixels.as_chunks_mut::<4>();
-    for [r, g, b, a] in pixels {
-        let alpha = u32::from(*a);
-        *r = (u32::from(*r) * alpha / 255) as u8;
-        *g = (u32::from(*g) * alpha / 255) as u8;
-        *b = (u32::from(*b) * alpha / 255) as u8;
-    }
 }

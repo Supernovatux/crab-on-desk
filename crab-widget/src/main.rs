@@ -14,13 +14,19 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{env, io, os::unix::process::CommandExt, path::PathBuf, process::Command, time::Instant};
+use std::{
+    env, io,
+    os::unix::process::CommandExt,
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::Instant,
+};
 
 use crab_common::{
     atlas::Animations,
-    config::Config,
-    dirs::{CommonError, get_config_file},
-    toml_file::{self, TomlFileError},
+    config::{Config, ConfigError},
+    dirs::{CommonError, get_sibling_executable},
+    gui::{GUI_BINARY, INIT_MODE},
 };
 use crab_widget::{
     handler::{self, HandlerError, Outcome},
@@ -34,12 +40,9 @@ const REPLACED_SUFFIX: &str = " (deleted)";
 
 #[derive(Debug, Snafu)]
 enum WidgetError {
-    #[snafu(display("config directory error"))]
-    #[snafu(context(false))]
-    Dir { source: CommonError },
     #[snafu(display("config error"))]
     #[snafu(context(false))]
-    Config { source: TomlFileError },
+    Config { source: ConfigError },
     #[snafu(display("window error"))]
     #[snafu(context(false))]
     Window { source: WindowError },
@@ -51,12 +54,22 @@ enum WidgetError {
     Handler { source: HandlerError },
     #[snafu(display("Unable to restart the widget"))]
     Restart { source: io::Error },
+    #[snafu(context(false))]
+    Dir { source: CommonError },
+    #[snafu(display("Unable to start {GUI_BINARY} {INIT_MODE}"))]
+    Init { source: io::Error },
 }
 
 #[snafu::report]
 fn main() -> Result<(), WidgetError> {
-    let config: Config = toml_file::read(get_config_file()?)?;
-    let theme = Theme::load(config.default_theme)?;
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("{}", snafu::Report::from_error(error));
+            return launch_init();
+        }
+    };
+    let theme = Theme::load(config.theme_dir()?)?;
     let state = StateMachine::new(
         theme.behaviour().clone(),
         theme.clip_lengths(),
@@ -67,6 +80,18 @@ fn main() -> Result<(), WidgetError> {
     if handler::run(window, window_events, state)? == Outcome::Restart {
         return Err(restart()).context(RestartSnafu);
     }
+    Ok(())
+}
+
+fn launch_init() -> Result<(), WidgetError> {
+    Command::new(get_sibling_executable(GUI_BINARY)?)
+        .arg(INIT_MODE)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .context(InitSnafu)?;
     Ok(())
 }
 

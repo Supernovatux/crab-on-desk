@@ -15,19 +15,26 @@
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 mod catalog;
-mod job;
 mod style;
 mod view;
+
+use std::{
+    fs::{File, TryLockError},
+    io,
+    os::unix::process::CommandExt,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use crab_common::{
     config::Config,
     control::{Control, Message as WidgetMessage},
-    dirs::get_config_file,
-    gui::{GENERATE_COMMAND, IMPORT_COMMAND, SETTINGS_APP_ID},
-    hooks, ipc, toml_file,
+    dirs::{CommonError, get_settings_lock, get_sibling_executable},
+    gui::{SETTINGS_APP_ID, WIDGET_BINARY},
+    hooks, ipc,
 };
 use iced::{Size, Task, window};
-use snafu::Snafu;
+use snafu::{ResultExt, Snafu};
 
 use crate::{
     desktop::{self, Desktop, Output},
@@ -36,21 +43,31 @@ use crate::{
 use catalog::ThemeEntry;
 use style::Colors;
 
-const TITLE: &str = "Crab Settings";
+const SETTINGS_TITLE: &str = "Crab Settings";
+const SETUP_TITLE: &str = "Crab Setup";
 const WINDOW_SIZE: Size = Size::new(800.0, 560.0);
 const MIN_WINDOW_SIZE: Size = Size::new(640.0, 480.0);
 const SAVED_OFFLINE: &str = "Saved. The widget is not running; it applies at the next start.";
 const SAVED: &str = "Saved. The widget is restarting.";
-const DONE: &str = "Done.";
 
 #[derive(Debug, Snafu)]
 pub enum SettingsError {
     #[snafu(display("Unable to show the settings window"))]
     Window { source: iced::Error },
+    #[snafu(context(false))]
+    Dir { source: CommonError },
+    #[snafu(display("Unable to lock {path:?}"))]
+    Lock { source: io::Error, path: PathBuf },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Page {
+enum Mode {
+    Settings,
+    Setup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
     General,
     Theme,
     Claude,
@@ -66,13 +83,8 @@ enum Message {
     Show(Page),
     FreeRoam(bool),
     SelectTheme(String),
-    Regenerate(String),
-    Delete(String),
-    ConfirmDelete(String),
-    ReferenceChanged(String),
-    Import,
-    JobFinished(Result<(), String>),
     Hooks(bool),
+    Finish,
     MoveTo(String),
     DismissToast,
 }
@@ -91,28 +103,35 @@ struct Toast {
 }
 
 struct Settings {
+    mode: Mode,
     page: Page,
     colors: &'static Colors,
-    config: Option<Config>,
+    theme: Option<String>,
+    free_roam: bool,
     themes: Vec<ThemeEntry>,
     hooks: Hooks,
     desktop: Option<Box<dyn Desktop>>,
     outputs: Result<Vec<Output>, String>,
-    reference: String,
-    job: Option<String>,
-    deleting: Option<String>,
     toast: Option<Toast>,
 }
 
-pub fn run() -> Result<(), SettingsError> {
+pub fn run(config: Option<Config>, page: Page) -> Result<(), SettingsError> {
+    let Some(_lock) = lock()? else {
+        return Ok(());
+    };
     let appearance = theme::system();
     let colors = style::colors(appearance);
+    let title = if config.is_some() {
+        SETTINGS_TITLE
+    } else {
+        SETUP_TITLE
+    };
     iced::application(
-        move || Settings::new(colors),
+        move || Settings::new(colors, config.clone(), page),
         Settings::update,
         Settings::view,
     )
-    .title(TITLE)
+    .title(title)
     .theme(style::theme(appearance))
     .window(window::Settings {
         size: WINDOW_SIZE,
@@ -122,6 +141,16 @@ pub fn run() -> Result<(), SettingsError> {
     })
     .run()
     .map_err(|source| SettingsError::Window { source })
+}
+
+fn lock() -> Result<Option<File>, SettingsError> {
+    let path = get_settings_lock()?;
+    let file = File::create(&path).context(LockSnafu { path: &path })?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(source)) => Err(SettingsError::Lock { source, path }),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -149,29 +178,41 @@ fn notify_widget(message: &WidgetMessage) -> Result<bool, String> {
     Ok(true)
 }
 
+fn start_widget() -> Result<(), String> {
+    if notify_widget(&WidgetMessage::Control(Control::Reload))? {
+        return Ok(());
+    }
+    let program = get_sibling_executable(WIDGET_BINARY).map_err(report)?;
+    Command::new(&program)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|error| format!("Unable to start {}: {error}", program.display()))?;
+    Ok(())
+}
+
 impl Settings {
-    fn new(colors: &'static Colors) -> Self {
+    fn new(colors: &'static Colors, config: Option<Config>, page: Page) -> Self {
         let desktop = desktop::detect();
+        let mode = if config.is_some() {
+            Mode::Settings
+        } else {
+            Mode::Setup
+        };
         let mut settings = Self {
-            page: Page::General,
+            mode,
+            page,
             colors,
-            config: None,
+            free_roam: config.as_ref().is_some_and(|config| config.free_roam),
+            theme: config.map(|config| config.default_theme),
             themes: Vec::new(),
             hooks: Hooks::Missing,
             outputs: Ok(Vec::new()),
             desktop,
-            reference: String::new(),
-            job: None,
-            deleting: None,
             toast: None,
         };
-        match get_config_file()
-            .map_err(report)
-            .and_then(|path| toml_file::read(path).map_err(report))
-        {
-            Ok(config) => settings.config = Some(config),
-            Err(error) => settings.fail(error),
-        }
         settings.refresh_themes();
         settings.refresh_hooks();
         settings.refresh_outputs();
@@ -182,39 +223,19 @@ impl Settings {
         match message {
             Message::Show(page) => {
                 self.page = page;
-                self.deleting = None;
                 if page == Page::Displays {
                     self.refresh_outputs();
                 }
             }
-            Message::FreeRoam(enabled) => self.change_config(|config| config.free_roam = enabled),
+            Message::FreeRoam(enabled) => {
+                self.free_roam = enabled;
+                self.save();
+            }
             Message::SelectTheme(theme) => {
-                self.change_config(|config| config.default_theme = theme);
+                self.theme = Some(theme);
+                self.save();
             }
-            Message::Regenerate(theme) => {
-                return self.start_job(
-                    format!("Generating {theme}…"),
-                    vec![GENERATE_COMMAND.to_owned(), theme],
-                );
-            }
-            Message::ConfirmDelete(theme) => self.deleting = Some(theme),
-            Message::Delete(theme) => self.delete(&theme),
-            Message::ReferenceChanged(reference) => self.reference = reference,
-            Message::Import => {
-                let reference = self.reference.trim().to_owned();
-                return self.start_job(
-                    "Importing themes, this takes several minutes…".to_owned(),
-                    vec![IMPORT_COMMAND.to_owned(), reference],
-                );
-            }
-            Message::JobFinished(result) => {
-                self.job = None;
-                self.refresh_themes();
-                match result {
-                    Ok(()) => self.apply(DONE, DONE),
-                    Err(error) => self.fail(error),
-                }
-            }
+            Message::Finish => return self.finish(),
             Message::Hooks(install) => {
                 let result = if install {
                     hooks::install()
@@ -245,26 +266,36 @@ impl Settings {
         Task::none()
     }
 
-    fn start_job(&mut self, label: String, args: Vec<String>) -> Task<Message> {
-        if self.job.is_some() {
-            return Task::none();
-        }
-        self.job = Some(label);
-        self.toast = None;
-        Task::perform(job::run_settings(args), Message::JobFinished)
+    fn config(&self) -> Option<Config> {
+        self.theme.clone().map(|default_theme| Config {
+            default_theme,
+            free_roam: self.free_roam,
+        })
     }
 
-    fn change_config(&mut self, change: impl FnOnce(&mut Config)) {
-        let Some(config) = self.config.as_mut() else {
+    fn save(&mut self) {
+        if self.mode == Mode::Setup {
+            return;
+        }
+        let Some(config) = self.config() else {
             return;
         };
-        change(config);
-        let saved = get_config_file()
-            .map_err(report)
-            .and_then(|path| toml_file::write(path, &*config).map_err(report));
-        match saved {
+        match config.save() {
             Ok(()) => self.apply(SAVED, SAVED_OFFLINE),
-            Err(error) => self.fail(error),
+            Err(error) => self.fail(report(error)),
+        }
+    }
+
+    fn finish(&mut self) -> Task<Message> {
+        let Some(config) = self.config() else {
+            return Task::none();
+        };
+        match config.save().map_err(report).and_then(|()| start_widget()) {
+            Ok(()) => iced::exit(),
+            Err(error) => {
+                self.fail(error);
+                Task::none()
+            }
         }
     }
 
@@ -276,22 +307,8 @@ impl Settings {
         }
     }
 
-    fn delete(&mut self, theme: &str) {
-        self.deleting = None;
-        if self.is_active(theme) {
-            return;
-        }
-        match catalog::delete(theme) {
-            Ok(()) => self.say(format!("Deleted {theme}.")),
-            Err(error) => self.fail(report(error)),
-        }
-        self.refresh_themes();
-    }
-
     fn is_active(&self, theme: &str) -> bool {
-        self.config
-            .as_ref()
-            .is_some_and(|config| config.default_theme == theme)
+        self.theme.as_deref() == Some(theme)
     }
 
     fn refresh_themes(&mut self) {

@@ -75,6 +75,7 @@ use crate::{
 };
 
 const BUTTON_LEFT: u32 = 0x110;
+const BUTTON_RIGHT: u32 = 0x111;
 const INPUT_IDLE_VERSION: u32 = 2;
 const NAMESPACE: &str = "carb-on-desk";
 const SIZE: u32 = 200;
@@ -458,6 +459,14 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
                 ..
             } => {
                 self.gesture = Gesture::Pressed { at: event.position };
+            }
+            PointerEventKind::Press {
+                button: BUTTON_RIGHT,
+                ..
+            } => {
+                if matches!(self.gesture, Gesture::Released) {
+                    let _ = self.events.send(WindowEvent::OpenSettings);
+                }
             }
             PointerEventKind::Release {
                 button: BUTTON_LEFT,

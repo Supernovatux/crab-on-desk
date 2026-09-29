@@ -1,4 +1,8 @@
-assets
 target
 CLAUDE.md
 task.md
+assets/themes/calico
+assets/themes/cloudling
+build
+assets
+.claude
