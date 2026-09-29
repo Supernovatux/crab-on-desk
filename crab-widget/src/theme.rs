@@ -14,7 +14,7 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, fs, io, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, fs::File, io, path::PathBuf, time::Duration};
 
 use crab_common::{
     atlas::{Animations, MANIFEST_FILE, Rect, ThemeBehaviour, ThemeManifest},
@@ -22,6 +22,7 @@ use crab_common::{
     toml_file::{self, TomlFileError},
 };
 use ktx2::{Format, Reader};
+use memmap2::Mmap;
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
 const BC7_BLOCK_BYTES: u64 = 16;
@@ -57,7 +58,14 @@ pub struct Animation {
     pub frame_delays: Vec<Duration>,
     pub loops: bool,
     pub hitbox: Rect,
-    pub blocks: Vec<u8>,
+    texture: Reader<Mmap>,
+}
+
+impl Animation {
+    #[must_use]
+    pub fn blocks(&self) -> &[u8] {
+        self.texture.levels().next().map_or(&[], |level| level.data)
+    }
 }
 
 impl Theme {
@@ -95,8 +103,10 @@ impl Theme {
             .get(&animation)
             .context(MissingSnafu { animation })?;
         let path = get_animation_texture(&self.dir, animation)?;
-        let bytes = fs::read(&path).context(ReadSnafu { path: path.clone() })?;
-        let reader = Reader::new(bytes.as_slice()).context(Ktx2Snafu { path: path.clone() })?;
+        let mapping = File::open(&path)
+            .and_then(|file| unsafe { Mmap::map(&file) })
+            .context(ReadSnafu { path: path.clone() })?;
+        let reader = Reader::new(mapping).context(Ktx2Snafu { path: path.clone() })?;
         let header = reader.header();
         let level = reader
             .levels()
@@ -133,7 +143,7 @@ impl Theme {
                 .collect(),
             loops: info.loops,
             hitbox: info.hitbox,
-            blocks: level.data.to_vec(),
+            texture: reader,
         })
     }
 }

@@ -17,7 +17,7 @@
 use iced::{
     Background, Border, Color, Theme, color,
     theme::Palette,
-    widget::{button, container},
+    widget::{button, container, text_input},
 };
 
 use crate::theme::{Appearance, BRAND, Scheme, outline};
@@ -38,6 +38,8 @@ const BUTTON_RADIUS: f32 = 8.0;
 const BLOCK_RADIUS: f32 = 10.0;
 const PILL_RADIUS: f32 = 6.0;
 const TAG_OPACITY: f32 = 0.7;
+const DISABLED_OPACITY: f32 = 0.4;
+const SELECTION_OPACITY: f32 = 0.3;
 
 #[derive(Debug)]
 pub struct Colors {
@@ -168,13 +170,15 @@ pub fn code_block(colors: &Colors) -> container::Style {
 #[must_use]
 pub fn allow(theme: &Theme, status: button::Status) -> button::Style {
     let primary = theme.extended_palette().primary;
-    let pair = match status {
-        button::Status::Hovered | button::Status::Pressed => primary.strong,
-        button::Status::Active | button::Status::Disabled => primary.base,
+    let pair = if hovered(status) {
+        primary.strong
+    } else {
+        primary.base
     };
+    let opacity = opacity(status);
     button::Style {
-        background: Some(Background::Color(pair.color)),
-        text_color: pair.text,
+        background: Some(Background::Color(pair.color.scale_alpha(opacity))),
+        text_color: pair.text.scale_alpha(opacity),
         border: Border::default().rounded(BUTTON_RADIUS),
         ..button::Style::default()
     }
@@ -187,10 +191,11 @@ pub fn deny(colors: &Colors, status: button::Status) -> button::Style {
     } else {
         (colors.deny_background, colors.deny_border)
     };
+    let opacity = opacity(status);
     button::Style {
-        background: Some(Background::Color(background)),
-        text_color: colors.deny_text,
-        border: outline(border, BUTTON_RADIUS),
+        background: Some(Background::Color(background.scale_alpha(opacity))),
+        text_color: colors.deny_text.scale_alpha(opacity),
+        border: outline(border.scale_alpha(opacity), BUTTON_RADIUS),
         ..button::Style::default()
     }
 }
@@ -215,12 +220,52 @@ pub fn secondary(colors: &Colors, text: Color, status: button::Status) -> button
 }
 
 #[must_use]
-pub fn plain(colors: &Colors, status: button::Status) -> button::Style {
+pub fn option(
+    colors: &Colors,
+    theme: &Theme,
+    selected: bool,
+    status: button::Status,
+) -> button::Style {
+    let accent = theme.extended_palette().primary.base.color;
+    let (background, border) = match (selected, hovered(status)) {
+        (true, _) => (accent.scale_alpha(SELECTION_OPACITY * 0.5), accent),
+        (false, true) => (
+            colors.secondary_hover_background,
+            colors.secondary_hover_border,
+        ),
+        (false, false) => (colors.secondary_background, colors.secondary_border),
+    };
     button::Style {
-        background: hovered(status).then_some(Background::Color(colors.secondary_hover_background)),
-        text_color: colors.code_text,
-        border: Border::default().rounded(BUTTON_RADIUS),
+        background: Some(Background::Color(background)),
+        text_color: colors.text,
+        border: outline(border, BUTTON_RADIUS),
         ..button::Style::default()
+    }
+}
+
+#[must_use]
+pub fn input(colors: &Colors, theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let accent = theme.extended_palette().primary.base.color;
+    let border = match status {
+        text_input::Status::Focused { .. } => accent,
+        text_input::Status::Hovered => colors.secondary_hover_border,
+        text_input::Status::Active | text_input::Status::Disabled => colors.secondary_border,
+    };
+    text_input::Style {
+        background: Background::Color(colors.code_background),
+        border: outline(border, BUTTON_RADIUS),
+        icon: colors.code_text,
+        placeholder: faded(colors.code_text),
+        value: colors.text,
+        selection: accent.scale_alpha(SELECTION_OPACITY),
+    }
+}
+
+const fn opacity(status: button::Status) -> f32 {
+    if matches!(status, button::Status::Disabled) {
+        DISABLED_OPACITY
+    } else {
+        1.0
     }
 }
 

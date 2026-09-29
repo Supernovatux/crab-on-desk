@@ -17,12 +17,11 @@
 use std::{io::Write, path::PathBuf};
 
 use crab_common::{
-    agent::{
-        Agent, AgentEvent, CompactTrigger, EventKind, MAX_TOOL_INPUT_BYTES, PermissionDecision,
-    },
+    agent::{Agent, AgentEvent, CompactTrigger, EventKind, PermissionDecision},
     claude::{CLAUDE_PROCESS, HookEvent},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use snafu::{ResultExt, Snafu};
 
 use crate::process;
@@ -50,7 +49,8 @@ struct Payload {
     reason: Option<String>,
     trigger: Option<String>,
     agent_id: Option<String>,
-    tool_input: Option<serde_json::Value>,
+    tool_input: Option<Value>,
+    permission_suggestions: Option<Vec<Value>>,
 }
 
 #[derive(Serialize)]
@@ -133,24 +133,83 @@ impl Payload {
             HookEvent::Elicitation => EventKind::Elicitation,
             HookEvent::WorktreeCreate => EventKind::WorktreeCreate,
             HookEvent::PermissionRequest => EventKind::PermissionRequest {
-                tool_input: self.tool_input_text(),
+                tool_input: self.tool_input.clone().unwrap_or_default(),
+                suggestions: self.permission_suggestions.clone().unwrap_or_default(),
             },
         }
-    }
-
-    fn tool_input_text(&self) -> String {
-        let mut text = self
-            .tool_input
-            .as_ref()
-            .and_then(|input| serde_json::to_string_pretty(input).ok())
-            .unwrap_or_default();
-        text.truncate(text.floor_char_boundary(MAX_TOOL_INPUT_BYTES));
-        text
     }
 
     fn spawns_subagent(&self) -> bool {
         self.tool_name
             .as_deref()
             .is_some_and(|tool| SUBAGENT_TOOLS.contains(&tool))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn printed(decision: PermissionDecision) -> Option<Value> {
+        let mut out = Vec::new();
+        print_decision(decision, &mut out).ok()?;
+        serde_json::from_slice(&out).ok()
+    }
+
+    #[test]
+    fn plain_allow_has_no_updates() {
+        let decision = PermissionDecision::Allow {
+            updated_input: None,
+            updated_permissions: Vec::new(),
+        };
+        assert_eq!(
+            printed(decision),
+            Some(json!({"hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {"behavior": "allow"},
+            }}))
+        );
+    }
+
+    #[test]
+    fn allow_carries_updates_in_claude_field_names() {
+        let mode = json!({"type": "setMode", "mode": "auto", "destination": "session"});
+        let decision = PermissionDecision::Allow {
+            updated_input: Some(json!({"plan": "p"})),
+            updated_permissions: vec![mode.clone()],
+        };
+        assert_eq!(
+            printed(decision),
+            Some(json!({"hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {
+                    "behavior": "allow",
+                    "updatedInput": {"plan": "p"},
+                    "updatedPermissions": [mode],
+                },
+            }}))
+        );
+    }
+
+    #[test]
+    fn permission_request_keeps_input_and_suggestions() {
+        let payload = json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": "s",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "permission_suggestions": [{"type": "setMode", "mode": "auto"}],
+        });
+        assert_eq!(
+            serde_json::from_value::<Payload>(payload)
+                .ok()
+                .map(|payload| payload.kind(HookEvent::PermissionRequest)),
+            Some(EventKind::PermissionRequest {
+                tool_input: json!({"command": "ls"}),
+                suggestions: vec![json!({"type": "setMode", "mode": "auto"})],
+            })
+        );
     }
 }

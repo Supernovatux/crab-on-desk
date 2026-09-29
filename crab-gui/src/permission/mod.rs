@@ -15,23 +15,22 @@
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 mod detail;
+mod request;
 mod style;
 
-use std::{
-    io::{self, Read, Write},
-    path::Path,
-};
+use std::io::{self, Read, Write};
 
 use crab_common::{
-    agent::{AgentEvent, EventKind, MAX_MESSAGE_BYTES, PermissionDecision},
+    agent::{AgentEvent, MAX_MESSAGE_BYTES, PermissionDecision},
     gui::PERMISSION_APP_ID,
 };
 use iced::{
     Element, Fill, Font, Length, Size, Task,
+    alignment::Horizontal,
     widget::{
-        button, column, container, row, scrollable,
+        Column, button, column, container, operation, row, scrollable,
         scrollable::{Direction, Scrollbar},
-        sensor, space, text,
+        sensor, space, text, text_input,
     },
     window,
 };
@@ -41,34 +40,52 @@ use crate::{
     desktop::{self, Desktop},
     theme::{self, BOLD, MEDIUM, SEMIBOLD},
 };
-use detail::Detail;
+use request::{Answer, Kind, Question, Request};
 use style::Colors;
 
-const TITLE: &str = "Permission Request";
+const PERMISSION_TITLE: &str = "Permission Request";
+const PLAN_TITLE: &str = "Plan Review";
+const QUESTION_TITLE: &str = "Needs Input";
 const ALLOW_LABEL: &str = "Allow";
 const DENY_LABEL: &str = "Deny";
+const APPROVE_LABEL: &str = "Approve";
+const REJECT_LABEL: &str = "Reject";
+const FEEDBACK_LABEL: &str = "Suggest changes";
+const FEEDBACK_PLACEHOLDER: &str = "What should be changed?";
+const SEND_LABEL: &str = "Send";
+const BACK_LABEL: &str = "Back";
+const NEXT_LABEL: &str = "Next";
+const SUBMIT_LABEL: &str = "Submit Answer";
+const OTHER_LABEL: &str = "Other";
+const OTHER_PLACEHOLDER: &str = "Type your answer\u{2026}";
+const SINGLE_HINT: &str = "Choose one option";
+const MULTI_HINT: &str = "Multi-select, choose at least one";
 const TERMINAL_LABEL: &str = "Go to Terminal";
-const EXPAND_LABEL: &str = "View details";
-const COLLAPSE_LABEL: &str = "Collapse";
-const TRUNCATED_LABEL: &str = "Content is too large and has been truncated.";
 const DENY_MESSAGE: &str = "Denied from crab-on-desk";
-const SESSION_SEPARATOR: &str = " \u{b7} ";
-const SESSION_ID_CHARS: usize = 3;
+const TEXT_INPUT_ID: &str = "crab-permission-input";
+const SELECTED_MARK: &str = "\u{25cf}";
+const UNSELECTED_MARK: &str = "\u{25cb}";
+const CHECKED_MARK: &str = "\u{25a0}";
+const UNCHECKED_MARK: &str = "\u{25a1}";
 
 const COMPACT_WIDTH: f32 = 328.0;
-const EXPANDED_WIDTH: f32 = 488.0;
-const EXPANDED_MAX_HEIGHT: f32 = 608.0;
+const PLAN_WIDTH: f32 = 488.0;
+const MAX_HEIGHT: f32 = 608.0;
 const INITIAL_HEIGHT: f32 = 220.0;
 const CARD_PADDING: [u16; 2] = [16, 20];
 const CARD_GAP: u32 = 8;
 const HEADER_GAP: u32 = 4;
+const OPTION_GAP: u32 = 6;
 const PILL_PADDING: [u16; 2] = [3, 8];
-const PREVIEW_PADDING: [u16; 2] = [10, 12];
-const DETAIL_PADDING: u16 = 12;
+const CODE_PADDING: [u16; 2] = [10, 12];
+const QUESTION_PADDING: u16 = 12;
 const BUTTON_PADDING: [u16; 2] = [7, 0];
 const SECONDARY_PADDING: [u16; 2] = [7, 12];
-const COLLAPSE_PADDING: [u16; 2] = [5, 7];
+const OPTION_PADDING: [u16; 2] = [8, 10];
+const INPUT_PADDING: u16 = 8;
 const SCROLLBAR_WIDTH: f32 = 6.0;
+const TOOL_MAX_HEIGHT: f32 = 160.0;
+const PLAN_MAX_HEIGHT: f32 = 320.0;
 
 const TITLE_SIZE: u32 = 13;
 const PILL_SIZE: u32 = 11;
@@ -76,13 +93,8 @@ const TAG_SIZE: u32 = 11;
 const CODE_SIZE: u32 = 12;
 const BUTTON_SIZE: u32 = 13;
 const SECONDARY_SIZE: u32 = 12;
-const COLLAPSE_SIZE: u32 = 11;
+const QUESTION_SIZE: u32 = 13;
 const CODE_LINE_HEIGHT: f32 = 1.5;
-const CODE_LINE: f32 = 18.0;
-const PREVIEW_CLAMP: f32 = 54.0;
-const PREVIEW_MAX_HEIGHT: f32 = 76.0;
-const OVERFLOW_TOLERANCE: f32 = 1.0;
-const MIN_DETAIL_LINES: f32 = 5.0;
 
 #[derive(Debug, Snafu)]
 pub enum PermissionError {
@@ -90,36 +102,26 @@ pub enum PermissionError {
     Stdin { source: io::Error },
     #[snafu(display("Invalid permission request"))]
     Request { source: serde_json::Error },
-    #[snafu(display("The request is not a permission request"))]
-    NotPermission,
     #[snafu(display("Unable to show the permission prompt"))]
     Window { source: iced::Error },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Message {
     Allow,
     Deny,
+    Suggest(usize),
     GoToTerminal,
-    Expand,
-    Collapse,
+    OpenFeedback,
+    CloseFeedback,
+    FeedbackChanged(String),
+    SendFeedback,
+    Toggle(usize),
+    ToggleOther,
+    OtherChanged(String),
+    Next,
+    Back,
     CardSized(Size),
-    PreviewSized(Size),
-    DetailSized(Size),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Layout {
-    Compact,
-    Expanded,
-}
-
-#[derive(Debug, Clone)]
-struct Request {
-    tool: String,
-    session: String,
-    detail: Detail,
-    terminal: Option<u32>,
 }
 
 struct Prompt {
@@ -127,84 +129,63 @@ struct Prompt {
     colors: &'static Colors,
     desktop: Option<Box<dyn Desktop>>,
     error: Option<String>,
-    layout: Layout,
-    preview_overflows: bool,
+    feedback: Option<String>,
+    question: usize,
+    answers: Vec<Answer>,
     card_height: f32,
-    detail_height: f32,
-    viewport: f32,
     window: Size,
 }
 
 pub fn run() -> Result<(), PermissionError> {
-    let request = read_request()?;
+    let Some(request) = read_request()? else {
+        return Ok(());
+    };
     let appearance = theme::system();
     let colors = style::colors(appearance);
+    let initial = Size::new(width(&request.kind), INITIAL_HEIGHT);
     iced::application(
         move || Prompt {
+            answers: match &request.kind {
+                Kind::Questions(questions) => vec![Answer::default(); questions.len()],
+                Kind::Tool(_) | Kind::Plan(_) => Vec::new(),
+            },
             request: request.clone(),
             colors,
             desktop: desktop::detect(),
             error: None,
-            layout: Layout::Compact,
-            preview_overflows: false,
+            feedback: None,
+            question: 0,
             card_height: INITIAL_HEIGHT,
-            detail_height: 0.0,
-            viewport: MIN_DETAIL_LINES * CODE_LINE,
-            window: Size::new(COMPACT_WIDTH, INITIAL_HEIGHT),
+            window: initial,
         },
         Prompt::update,
         Prompt::view,
     )
-    .title(TITLE)
+    .title(PERMISSION_TITLE)
     .theme(style::theme(appearance))
-    .window(window_settings())
+    .window(window_settings(initial))
     .run()
     .context(WindowSnafu)
 }
 
-fn read_request() -> Result<Request, PermissionError> {
+fn read_request() -> Result<Option<Request>, PermissionError> {
     let mut input = Vec::new();
     io::stdin()
         .take(MAX_MESSAGE_BYTES)
         .read_to_end(&mut input)
         .context(StdinSnafu)?;
     let event: AgentEvent = serde_json::from_slice(&input).context(RequestSnafu)?;
-    let EventKind::PermissionRequest { tool_input } = &event.kind else {
-        return NotPermissionSnafu.fail();
-    };
-    let tool = event.tool_name.clone().unwrap_or_default();
-    Ok(Request {
-        detail: detail::describe(&tool, tool_input),
-        session: session_tag(&event),
-        tool,
-        terminal: event.source_pid,
-    })
+    Ok(Request::parse(&event))
 }
 
-fn session_tag(event: &AgentEvent) -> String {
-    let folder = event
-        .cwd
-        .as_deref()
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().into_owned());
-    let skip = event
-        .session_id
-        .chars()
-        .count()
-        .saturating_sub(SESSION_ID_CHARS);
-    let short_id = format!(
-        "#{}",
-        event.session_id.chars().skip(skip).collect::<String>()
-    );
-    folder
-        .into_iter()
-        .chain([short_id])
-        .collect::<Vec<_>>()
-        .join(SESSION_SEPARATOR)
+const fn width(kind: &Kind) -> f32 {
+    match kind {
+        Kind::Plan(_) => PLAN_WIDTH,
+        Kind::Tool(_) | Kind::Questions(_) => COMPACT_WIDTH,
+    }
 }
 
-fn window_settings() -> window::Settings {
-    let size = Size::new(COMPACT_WIDTH, INITIAL_HEIGHT);
+fn window_settings(size: Size) -> window::Settings {
     window::Settings {
         size,
         min_size: Some(size),
@@ -239,39 +220,115 @@ fn decide(decision: &PermissionDecision) -> Task<Message> {
     iced::exit()
 }
 
-fn hidden_scroll() -> Direction {
-    Direction::Vertical(Scrollbar::hidden())
+fn deny(message: String) -> Task<Message> {
+    decide(&PermissionDecision::Deny { message })
+}
+
+fn scroll_direction(visible: bool) -> Direction {
+    Direction::Vertical(if visible {
+        Scrollbar::new()
+            .width(SCROLLBAR_WIDTH)
+            .scroller_width(SCROLLBAR_WIDTH)
+    } else {
+        Scrollbar::hidden()
+    })
 }
 
 impl Prompt {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Allow => decide(&PermissionDecision::Allow),
-            Message::Deny => decide(&PermissionDecision::Deny {
-                message: DENY_MESSAGE.to_owned(),
-            }),
+            Message::Allow => decide(&self.request.allow()),
+            Message::Deny => deny(DENY_MESSAGE.to_owned()),
+            Message::Suggest(index) => self
+                .request
+                .suggestions
+                .get(index)
+                .map_or_else(Task::none, |suggestion| {
+                    decide(&self.request.accept(suggestion))
+                }),
             Message::GoToTerminal => self.go_to_terminal(),
-            Message::Expand => {
-                self.layout = Layout::Expanded;
-                self.fit()
+            Message::OpenFeedback => {
+                self.feedback = Some(String::new());
+                operation::focus(TEXT_INPUT_ID)
             }
-            Message::Collapse => {
-                self.layout = Layout::Compact;
-                self.fit()
+            Message::CloseFeedback => {
+                self.feedback = None;
+                Task::none()
+            }
+            Message::FeedbackChanged(feedback) => {
+                self.feedback = Some(feedback);
+                Task::none()
+            }
+            Message::SendFeedback => match self.feedback.as_deref().map(str::trim) {
+                Some(feedback) if !feedback.is_empty() => deny(feedback.to_owned()),
+                _ => Task::none(),
+            },
+            Message::Toggle(option) => {
+                let multi = self.current_question().is_some_and(|q| q.multi_select);
+                if let Some(answer) = self.answers.get_mut(self.question) {
+                    toggle(answer, option, multi);
+                }
+                Task::none()
+            }
+            Message::ToggleOther => {
+                let multi = self.current_question().is_some_and(|q| q.multi_select);
+                let Some(answer) = self.answers.get_mut(self.question) else {
+                    return Task::none();
+                };
+                toggle_other(answer, multi);
+                if answer.other.is_some() {
+                    operation::focus(TEXT_INPUT_ID)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::OtherChanged(other) => {
+                if let Some(answer) = self.answers.get_mut(self.question) {
+                    answer.other = Some(other);
+                }
+                Task::none()
+            }
+            Message::Next => self.next(),
+            Message::Back => {
+                self.question = self.question.saturating_sub(1);
+                Task::none()
             }
             Message::CardSized(size) => {
                 self.card_height = size.height;
                 self.fit()
             }
-            Message::PreviewSized(size) => {
-                self.preview_overflows = size.height > PREVIEW_CLAMP + OVERFLOW_TOLERANCE;
-                Task::none()
-            }
-            Message::DetailSized(size) => {
-                self.detail_height = size.height;
-                self.fit()
-            }
         }
+    }
+
+    fn next(&mut self) -> Task<Message> {
+        if !self.current_complete() {
+            return Task::none();
+        }
+        if self.question + 1 < self.answers.len() {
+            self.question += 1;
+            return Task::none();
+        }
+        self.request
+            .answer(&self.answers)
+            .map_or_else(Task::none, |decision| decide(&decision))
+    }
+
+    fn current_question(&self) -> Option<&Question> {
+        match &self.request.kind {
+            Kind::Questions(questions) => questions.get(self.question),
+            Kind::Tool(_) | Kind::Plan(_) => None,
+        }
+    }
+
+    fn current_answer(&self) -> Option<&Answer> {
+        self.answers.get(self.question)
+    }
+
+    fn current_complete(&self) -> bool {
+        self.current_question()
+            .zip(self.current_answer())
+            .and_then(|(question, answer)| request::answer_text(question, answer))
+            .is_some()
     }
 
     fn go_to_terminal(&mut self) -> Task<Message> {
@@ -288,18 +345,10 @@ impl Prompt {
     }
 
     fn fit(&mut self) -> Task<Message> {
-        let size = match self.layout {
-            Layout::Compact => Size::new(COMPACT_WIDTH, self.card_height),
-            Layout::Expanded => {
-                let chrome = self.card_height - self.viewport;
-                let readable = MIN_DETAIL_LINES * CODE_LINE;
-                self.viewport = self
-                    .detail_height
-                    .min((EXPANDED_MAX_HEIGHT - chrome).max(readable));
-                Size::new(EXPANDED_WIDTH, chrome + self.viewport)
-            }
-        };
-        let size = Size::new(size.width, size.height.ceil());
+        let size = Size::new(
+            width(&self.request.kind),
+            self.card_height.min(MAX_HEIGHT).ceil(),
+        );
         if size == self.window {
             return Task::none();
         }
@@ -313,29 +362,12 @@ impl Prompt {
         })
     }
 
-    fn needs_expansion(&self) -> bool {
-        let detail = &self.request.detail;
-        detail.full != detail.preview || detail.truncated || self.preview_overflows
-    }
-
     fn view(&self) -> Element<'_, Message> {
         let card = column![self.header()]
             .push((!self.request.session.is_empty()).then(|| self.session()))
-            .push(match self.layout {
-                Layout::Compact => self.preview(),
-                Layout::Expanded => self.detail(),
-            })
-            .push(
-                (self.layout == Layout::Compact && self.needs_expansion()).then(|| {
-                    self.secondary_button(
-                        EXPAND_LABEL,
-                        SEMIBOLD,
-                        self.colors.secondary_hover_text,
-                        Message::Expand,
-                    )
-                }),
-            )
+            .push(self.body())
             .push(self.actions())
+            .push(self.suggestions())
             .push(
                 (self.desktop.is_some() && self.request.terminal.is_some()).then(|| {
                     self.secondary_button(
@@ -359,13 +391,18 @@ impl Prompt {
                 .on_show(Message::CardSized)
                 .on_resize(Message::CardSized),
         )
-        .direction(hidden_scroll())
+        .direction(scroll_direction(false))
         .width(Fill)
         .height(Fill)
         .into()
     }
 
     fn header(&self) -> Element<'_, Message> {
+        let title = match self.request.kind {
+            Kind::Tool(_) => PERMISSION_TITLE,
+            Kind::Plan(_) => PLAN_TITLE,
+            Kind::Questions(_) => QUESTION_TITLE,
+        };
         let pill = container(
             text(self.request.tool.to_uppercase())
                 .size(PILL_SIZE)
@@ -373,25 +410,29 @@ impl Prompt {
         )
         .padding(PILL_PADDING)
         .style(|_| style::pill(style::tool_color(&self.request.tool)));
-        let title = column![
-            text(TITLE)
-                .size(TITLE_SIZE)
-                .font(SEMIBOLD)
-                .color(self.colors.header),
-            pill,
+        let progress = match &self.request.kind {
+            Kind::Questions(questions) if questions.len() > 1 => Some(
+                text(format!("{} / {}", self.question + 1, questions.len()))
+                    .size(TAG_SIZE)
+                    .font(Font::MONOSPACE)
+                    .color(style::faded(self.colors.code_text)),
+            ),
+            Kind::Tool(_) | Kind::Plan(_) | Kind::Questions(_) => None,
+        };
+        row![
+            column![
+                text(title)
+                    .size(TITLE_SIZE)
+                    .font(SEMIBOLD)
+                    .color(self.colors.header),
+                pill,
+            ]
+            .spacing(HEADER_GAP),
+            space().width(Fill),
         ]
-        .spacing(HEADER_GAP);
-        let colors = self.colors;
-        let collapse = (self.layout == Layout::Expanded).then(|| {
-            button(text(COLLAPSE_LABEL).size(COLLAPSE_SIZE).font(SEMIBOLD))
-                .padding(COLLAPSE_PADDING)
-                .style(move |_, status| style::plain(colors, status))
-                .on_press(Message::Collapse)
-        });
-        row![title, space().width(Fill)]
-            .push(collapse)
-            .spacing(HEADER_GAP)
-            .into()
+        .push(progress)
+        .spacing(HEADER_GAP)
+        .into()
     }
 
     fn session(&self) -> Element<'_, Message> {
@@ -403,90 +444,248 @@ impl Prompt {
             .into()
     }
 
-    fn code(content: &str) -> text::Text<'_> {
-        text(content.to_owned())
-            .size(CODE_SIZE)
-            .font(Font::MONOSPACE)
-            .line_height(CODE_LINE_HEIGHT)
-            .wrapping(text::Wrapping::WordOrGlyph)
-            .width(Fill)
+    fn body(&self) -> Element<'_, Message> {
+        match &self.request.kind {
+            Kind::Tool(detail) => self.code(detail, TOOL_MAX_HEIGHT),
+            Kind::Plan(plan) => column![self.code(plan, PLAN_MAX_HEIGHT)]
+                .push(self.feedback.as_deref().map(|feedback| {
+                    self.input(FEEDBACK_PLACEHOLDER, feedback)
+                        .on_input(Message::FeedbackChanged)
+                        .on_submit(Message::SendFeedback)
+                }))
+                .spacing(CARD_GAP)
+                .into(),
+            Kind::Questions(_) => self.question_card(),
+        }
     }
 
-    fn preview(&self) -> Element<'_, Message> {
+    fn code<'a>(&self, content: &'a str, max_height: f32) -> Element<'a, Message> {
         let colors = self.colors;
         container(
             scrollable(
-                sensor(Self::code(&self.request.detail.preview))
-                    .on_show(Message::PreviewSized)
-                    .on_resize(Message::PreviewSized),
+                container(
+                    text(content)
+                        .size(CODE_SIZE)
+                        .font(Font::MONOSPACE)
+                        .line_height(CODE_LINE_HEIGHT)
+                        .wrapping(text::Wrapping::WordOrGlyph)
+                        .width(Fill),
+                )
+                .padding(CODE_PADDING),
             )
-            .direction(hidden_scroll())
+            .direction(scroll_direction(true))
             .height(Length::Shrink),
         )
-        .padding(PREVIEW_PADDING)
-        .max_height(PREVIEW_MAX_HEIGHT)
+        .max_height(max_height)
         .clip(true)
         .width(Fill)
         .style(move |_| style::code_block(colors))
         .into()
     }
 
-    fn detail(&self) -> Element<'_, Message> {
+    fn input<'a>(
+        &self,
+        placeholder: &'a str,
+        value: &'a str,
+    ) -> text_input::TextInput<'a, Message> {
         let colors = self.colors;
-        let block = container(Self::code(&self.request.detail.full))
-            .padding(DETAIL_PADDING)
-            .width(Fill)
-            .style(move |_| style::code_block(colors));
-        let scroll = scrollable(
-            sensor(block)
-                .on_show(Message::DetailSized)
-                .on_resize(Message::DetailSized),
-        )
-        .direction(Direction::Vertical(
-            Scrollbar::new()
-                .width(SCROLLBAR_WIDTH)
-                .scroller_width(SCROLLBAR_WIDTH),
-        ))
-        .height(self.viewport);
-        column![]
-            .push(self.request.detail.truncated.then(|| {
-                text(TRUNCATED_LABEL)
+        text_input(placeholder, value)
+            .id(TEXT_INPUT_ID)
+            .size(SECONDARY_SIZE)
+            .padding(INPUT_PADDING)
+            .style(move |theme, status| style::input(colors, theme, status))
+    }
+
+    fn question_card(&self) -> Element<'_, Message> {
+        let (Some(question), Some(answer)) = (self.current_question(), self.current_answer())
+        else {
+            return space().into();
+        };
+        let colors = self.colors;
+        let hint = if question.multi_select {
+            MULTI_HINT
+        } else {
+            SINGLE_HINT
+        };
+        let options = question
+            .options
+            .iter()
+            .enumerate()
+            .map(|(index, choice)| {
+                self.option(
+                    &choice.label,
+                    choice.description.as_deref(),
+                    answer.selected.contains(&index),
+                    question.multi_select,
+                    Message::Toggle(index),
+                )
+            })
+            .chain([self.option(
+                OTHER_LABEL,
+                None,
+                answer.other.is_some(),
+                question.multi_select,
+                Message::ToggleOther,
+            )]);
+        let card = column![]
+            .push(question.header.as_deref().map(|header| {
+                text(header.to_uppercase())
                     .size(TAG_SIZE)
-                    .color(self.colors.warning)
+                    .font(BOLD)
+                    .color(colors.code_text)
             }))
-            .push(scroll)
-            .spacing(CARD_GAP)
+            .push(
+                text(question.text.trim())
+                    .size(QUESTION_SIZE)
+                    .color(colors.text),
+            )
+            .push(
+                text(hint)
+                    .size(TAG_SIZE)
+                    .color(style::faded(colors.code_text)),
+            )
+            .push(Column::with_children(options).spacing(OPTION_GAP))
+            .push(answer.other.as_deref().map(|other| {
+                self.input(OTHER_PLACEHOLDER, other)
+                    .on_input(Message::OtherChanged)
+                    .on_submit(Message::Next)
+            }))
+            .spacing(OPTION_GAP);
+        container(card)
+            .padding(QUESTION_PADDING)
+            .width(Fill)
+            .style(move |_| style::code_block(colors))
+            .into()
+    }
+
+    fn option<'a>(
+        &self,
+        label: &'a str,
+        description: Option<&'a str>,
+        selected: bool,
+        multi: bool,
+        message: Message,
+    ) -> Element<'a, Message> {
+        let colors = self.colors;
+        let mark = match (multi, selected) {
+            (true, true) => CHECKED_MARK,
+            (true, false) => UNCHECKED_MARK,
+            (false, true) => SELECTED_MARK,
+            (false, false) => UNSELECTED_MARK,
+        };
+        let content = column![text(label).size(SECONDARY_SIZE).font(MEDIUM)]
+            .push(description.map(|description| {
+                text(description)
+                    .size(TAG_SIZE)
+                    .color(style::faded(colors.code_text))
+            }))
+            .width(Fill);
+        button(row![text(mark).size(SECONDARY_SIZE), content].spacing(OPTION_GAP))
+            .width(Fill)
+            .padding(OPTION_PADDING)
+            .style(move |theme, status| style::option(colors, theme, selected, status))
+            .on_press(message)
             .into()
     }
 
     fn actions(&self) -> Element<'_, Message> {
+        let (primary, primary_message, secondary, secondary_message) = match &self.request.kind {
+            Kind::Tool(_) => (
+                ALLOW_LABEL,
+                Some(Message::Allow),
+                DENY_LABEL,
+                Some(Message::Deny),
+            ),
+            Kind::Plan(_) => self.feedback.as_deref().map_or(
+                (
+                    APPROVE_LABEL,
+                    Some(Message::Allow),
+                    REJECT_LABEL,
+                    Some(Message::Deny),
+                ),
+                |feedback| {
+                    (
+                        SEND_LABEL,
+                        (!feedback.trim().is_empty()).then_some(Message::SendFeedback),
+                        BACK_LABEL,
+                        Some(Message::CloseFeedback),
+                    )
+                },
+            ),
+            Kind::Questions(questions) => (
+                if self.question + 1 < questions.len() {
+                    NEXT_LABEL
+                } else {
+                    SUBMIT_LABEL
+                },
+                self.current_complete().then_some(Message::Next),
+                BACK_LABEL,
+                (self.question > 0).then_some(Message::Back),
+            ),
+        };
         let colors = self.colors;
-        row![
+        let action = |label: &'static str| {
             button(
-                text(ALLOW_LABEL)
+                text(label)
                     .size(BUTTON_SIZE)
                     .font(SEMIBOLD)
                     .center()
-                    .width(Fill)
+                    .width(Fill),
             )
             .width(Fill)
             .padding(BUTTON_PADDING)
-            .style(style::allow)
-            .on_press(Message::Allow),
-            button(
-                text(DENY_LABEL)
-                    .size(BUTTON_SIZE)
-                    .font(SEMIBOLD)
-                    .center()
-                    .width(Fill)
-            )
-            .width(Fill)
-            .padding(BUTTON_PADDING)
-            .style(move |_, status| style::deny(colors, status))
-            .on_press(Message::Deny),
+        };
+        column![
+            row![
+                action(primary)
+                    .style(style::allow)
+                    .on_press_maybe(primary_message),
+                action(secondary)
+                    .style(move |_, status| style::deny(colors, status))
+                    .on_press_maybe(secondary_message),
+            ]
+            .spacing(CARD_GAP)
         ]
+        .push(
+            (matches!(self.request.kind, Kind::Plan(_)) && self.feedback.is_none()).then(|| {
+                self.secondary_button(
+                    FEEDBACK_LABEL,
+                    SEMIBOLD,
+                    self.colors.secondary_hover_text,
+                    Message::OpenFeedback,
+                )
+            }),
+        )
         .spacing(CARD_GAP)
         .into()
+    }
+
+    fn suggestions(&self) -> Option<Element<'_, Message>> {
+        if self.feedback.is_some() || self.request.suggestions.is_empty() {
+            return None;
+        }
+        let colors = self.colors;
+        let buttons = self
+            .request
+            .suggestions
+            .iter()
+            .enumerate()
+            .map(|(index, suggestion)| {
+                button(
+                    text(&suggestion.label)
+                        .size(SECONDARY_SIZE)
+                        .font(MEDIUM)
+                        .align_x(Horizontal::Left)
+                        .wrapping(text::Wrapping::None)
+                        .width(Fill),
+                )
+                .width(Fill)
+                .padding(SECONDARY_PADDING)
+                .style(move |_, status| style::secondary(colors, colors.secondary_text, status))
+                .on_press(Message::Suggest(index))
+                .into()
+            });
+        Some(Column::with_children(buttons).spacing(OPTION_GAP).into())
     }
 
     fn secondary_button(
@@ -509,5 +708,27 @@ impl Prompt {
         .style(move |_, status| style::secondary(colors, text_color, status))
         .on_press(message)
         .into()
+    }
+}
+
+fn toggle(answer: &mut Answer, option: usize, multi: bool) {
+    if !multi {
+        answer.selected = vec![option];
+        answer.other = None;
+    } else if let Some(position) = answer.selected.iter().position(|&index| index == option) {
+        answer.selected.remove(position);
+    } else {
+        answer.selected.push(option);
+    }
+}
+
+fn toggle_other(answer: &mut Answer, multi: bool) {
+    if !multi {
+        answer.selected.clear();
+        answer.other = Some(answer.other.take().unwrap_or_default());
+    } else if answer.other.is_some() {
+        answer.other = None;
+    } else {
+        answer.other = Some(String::new());
     }
 }

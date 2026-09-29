@@ -18,11 +18,7 @@ mod catalog;
 mod style;
 mod view;
 
-use std::{
-    fs::File,
-    io,
-    path::PathBuf,
-};
+use std::{fs::File, io, path::PathBuf};
 
 use crab_common::{
     config::Config,
@@ -31,7 +27,7 @@ use crab_common::{
     gui::{SETTINGS_APP_ID, WIDGET_BINARY},
     hooks, ipc, process,
 };
-use iced::{Size, Task, window};
+use iced::{Size, Subscription, Task, window};
 use snafu::{ResultExt, Snafu};
 
 use crate::{
@@ -85,6 +81,7 @@ enum Message {
     Finish,
     MoveTo(String),
     DismissToast,
+    Mapped,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +107,13 @@ struct Settings {
     hooks: Hooks,
     outputs: Result<Vec<Output>, String>,
     toast: Option<Toast>,
+    size: Pin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pin {
+    Fixed,
+    Free,
 }
 
 pub fn run(config: Option<Config>, page: Page) -> Result<(), SettingsError> {
@@ -130,9 +134,11 @@ pub fn run(config: Option<Config>, page: Page) -> Result<(), SettingsError> {
     )
     .title(title)
     .theme(style::theme(appearance))
+    .subscription(Settings::subscription)
     .window(window::Settings {
         size: WINDOW_SIZE,
-        min_size: Some(MIN_WINDOW_SIZE),
+        min_size: Some(WINDOW_SIZE),
+        max_size: Some(WINDOW_SIZE),
         platform_specific: platform_settings(),
         ..window::Settings::default()
     })
@@ -198,11 +204,29 @@ impl Settings {
             hooks: Hooks::Missing,
             outputs: Ok(Vec::new()),
             toast: None,
+            size: Pin::Fixed,
         };
         settings.refresh_themes();
         settings.refresh_hooks();
         settings.refresh_outputs();
         settings
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        match self.size {
+            Pin::Fixed => window::frames().map(|_| Message::Mapped),
+            Pin::Free => Subscription::none(),
+        }
+    }
+
+    fn unpin(&mut self) -> Task<Message> {
+        if self.size == Pin::Free {
+            return Task::none();
+        }
+        self.size = Pin::Free;
+        window::latest().and_then(|id| {
+            window::set_max_size(id, None).chain(window::set_min_size(id, Some(MIN_WINDOW_SIZE)))
+        })
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -248,6 +272,7 @@ impl Settings {
                 }
             }
             Message::DismissToast => self.toast = None,
+            Message::Mapped => return self.unpin(),
         }
         Task::none()
     }

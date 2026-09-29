@@ -137,9 +137,8 @@ impl Renderer for Opengl {
         }))
     }
     fn set_animation(&mut self, animation: &Animation) -> Result<(), RendererError> {
-        let size = i32::try_from(animation.blocks.len())
-            .ok()
-            .context(SizeSnafu)?;
+        let blocks = animation.blocks();
+        let size = i32::try_from(blocks.len()).ok().context(SizeSnafu)?;
         unsafe {
             gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
             gl::CompressedTexImage3D(
@@ -151,7 +150,7 @@ impl Renderer for Opengl {
                 animation.frame_count as i32,
                 0,
                 size,
-                animation.blocks.as_ptr().cast(),
+                blocks.as_ptr().cast(),
             );
         }
         self.frame_aspect = (f64::from(animation.width) / f64::from(animation.height)) as f32;

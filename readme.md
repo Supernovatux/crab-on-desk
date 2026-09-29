@@ -44,7 +44,7 @@ make uninstall themes-uninstall
 Turn the Claude Code hooks off in the settings window first, otherwise Claude will keep calling a `crab-hook` that no longer exists.
 
 ## Goals
-1. Use minimal RAM and CPU. (Currently uses about <> and <>.)
+1. Use minimal RAM and CPU. (Currently uses about 84MB of ram and almost 0 CPU.)
 2. Make the widget feature-complete with the original project.
 
 ## Features

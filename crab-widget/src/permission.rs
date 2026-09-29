@@ -70,6 +70,7 @@ pub const fn settles(kind: &EventKind) -> bool {
             | EventKind::PromptSubmit
             | EventKind::SessionEnd
             | EventKind::SessionClear
+            | EventKind::PermissionRequest { .. }
     )
 }
 

@@ -17,11 +17,11 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const AGENT_SOCKET: &str = "crab-on-desk.sock";
 pub const HOOK_BINARY: &str = "crab-hook";
-pub const MAX_MESSAGE_BYTES: u64 = 16 * 1024;
-pub const MAX_TOOL_INPUT_BYTES: usize = 8 * 1024;
+pub const MAX_MESSAGE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -41,7 +41,9 @@ impl Agent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EventKind {
-    SessionStart { source: Option<String> },
+    SessionStart {
+        source: Option<String>,
+    },
     SessionEnd,
     SessionClear,
     PromptSubmit,
@@ -50,14 +52,24 @@ pub enum EventKind {
     ToolFailure,
     Stop,
     StopFailure,
-    SubagentStart { id: Option<String> },
-    SubagentStop { id: Option<String> },
+    SubagentStart {
+        id: Option<String>,
+    },
+    SubagentStop {
+        id: Option<String>,
+    },
     CompactStart,
-    CompactEnd { trigger: CompactTrigger },
+    CompactEnd {
+        trigger: CompactTrigger,
+    },
     Notification,
     Elicitation,
     WorktreeCreate,
-    PermissionRequest { tool_input: String },
+    PermissionRequest {
+        tool_input: Value,
+        #[serde(default)]
+        suggestions: Vec<Value>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,8 +91,19 @@ pub struct AgentEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "behavior", rename_all = "kebab-case")]
+#[serde(
+    tag = "behavior",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum PermissionDecision {
-    Allow,
-    Deny { message: String },
+    Allow {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        updated_input: Option<Value>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        updated_permissions: Vec<Value>,
+    },
+    Deny {
+        message: String,
+    },
 }
