@@ -19,6 +19,7 @@ smithay-client-toolkit = "0.21.1"
 snafu.workspace = true
 wayland-client = "0.31.15"
 wayland-egl = "0.32.11"
+zbus = "5.19.0"
 
 [lints]
 workspace = true

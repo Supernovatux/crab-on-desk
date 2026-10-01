@@ -26,7 +26,7 @@ use calloop::{
     timer::{TimeoutAction, Timer},
 };
 use calloop_wayland_source::WaylandSource;
-use crab_common::atlas::{Animations, Rect};
+use crab_common::atlas::{Animations, Rect, TrackingLayer};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -70,7 +70,7 @@ use wayland_egl::WlEglSurface;
 use super::{Side, WindowCommand, WindowEvent};
 use crate::random::roll;
 use crate::{
-    renderer::{Renderer, RendererError},
+    renderer::{LayerOffset, Renderer, RendererError},
     theme::{Theme, ThemeError},
 };
 
@@ -89,6 +89,11 @@ const ROAM_MIN_DURATION_MS: f64 = 1000.0;
 const ROAM_ATTEMPTS: usize = 8;
 const ROAM_STEP: Duration = Duration::from_millis(16);
 const DRAG_THRESHOLD: f64 = 3.0;
+const LOOK_STEP: Duration = Duration::from_millis(16);
+const LOOK_FULL_DISTANCE: f64 = 300.0;
+const LOOK_LIMIT: (f64, f64) = (0.85, 0.5);
+const LOOK_SETTLED: f64 = 0.002;
+const OFFSET_STEPS_PER_PIXEL: f64 = 4.0;
 
 #[derive(Debug, Snafu)]
 pub enum WaylandError {
@@ -189,6 +194,20 @@ pub struct _WaylandWindow<T: Renderer> {
     loops: bool,
     frame: usize,
     frame_timer: Option<RegistrationToken>,
+    look: Look,
+}
+
+#[derive(Default)]
+struct Look {
+    cursor: Option<(f64, f64)>,
+    anchor: Option<(f64, f64)>,
+    layers: Vec<LookLayer>,
+    timer: Option<RegistrationToken>,
+}
+
+struct LookLayer {
+    tracking: TrackingLayer,
+    direction: (f64, f64),
 }
 
 struct Pointer {
@@ -319,6 +338,7 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
                 loops: true,
                 frame: 0,
                 frame_timer: None,
+                look: Look::default(),
             },
             event_loop,
         ))
@@ -346,6 +366,10 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
                     }
                     channel::Event::Msg(WindowCommand::MoveToOutput(name)) => {
                         app.move_to_output(&name)
+                    }
+                    channel::Event::Msg(WindowCommand::Look(cursor)) => {
+                        app.look.cursor = cursor;
+                        app.follow_cursor()
                     }
                     channel::Event::Closed => {
                         app.exit = true;
@@ -388,6 +412,16 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
         self.animation = Some(animation);
         self.hitbox = Some((loaded.hitbox, loaded.width, loaded.height));
         self.update_input_region()?;
+        self.look.anchor = loaded.anchor;
+        self.look.layers = loaded
+            .layers
+            .iter()
+            .map(|layer| LookLayer {
+                tracking: layer.tracking,
+                direction: (0.0, 0.0),
+            })
+            .collect();
+        self.follow_cursor()?;
         self.frame_delays = loaded.frame_delays;
         self.loops = loaded.loops;
         self.frame = 0;
@@ -739,34 +773,130 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
             }
         }
     }
-    fn report_center(&self) {
-        let Some(output) = self
+    fn global_origin(&self) -> Option<(f64, f64)> {
+        let output = self
             .output
             .as_ref()
-            .and_then(|output| self.output_state.info(output))
-        else {
-            return;
-        };
-        let (Some((output_x, output_y)), Some((output_width, output_height))) =
-            (output.logical_position, output.logical_size)
-        else {
-            return;
-        };
-        let (width, height) = (self.width as i32, self.height as i32);
+            .and_then(|output| self.output_state.info(output))?;
+        let ((output_x, output_y), (output_width, output_height)) =
+            (output.logical_position?, output.logical_size?);
         let (x, y) = match self.placement {
             Placement::Placed { applied, .. } => applied,
-            Placement::Anchored => (output_width - width, (output_height - height) / 2),
+            Placement::Anchored => (
+                output_width - self.width as i32,
+                (output_height - self.height as i32) / 2,
+            ),
         };
-        let center = (
-            f64::from(output_x + x) + f64::from(width) / 2.0,
-            f64::from(output_y + y) + f64::from(height) / 2.0,
-        );
-        let _ = self.events.send(WindowEvent::Moved { center });
+        Some((f64::from(output_x + x), f64::from(output_y + y)))
+    }
+    fn report_center(&self) {
+        if let Some((x, y)) = self.global_origin() {
+            let center = (
+                x + f64::from(self.width) / 2.0,
+                y + f64::from(self.height) / 2.0,
+            );
+            let _ = self.events.send(WindowEvent::Moved { center });
+        }
     }
     fn refresh_orientation(&mut self) -> Result<(), WaylandError> {
         self.update_input_region()?;
         self.invalidate();
+        self.follow_cursor()
+    }
+    fn look_direction(&self) -> (f64, f64) {
+        let (
+            Some((cursor_x, cursor_y)),
+            Some((anchor_x, anchor_y)),
+            Some((origin_x, origin_y)),
+            Some((_, width, height)),
+        ) = (
+            self.look.cursor,
+            self.look.anchor,
+            self.global_origin(),
+            self.hitbox,
+        )
+        else {
+            return (0.0, 0.0);
+        };
+        let mirrored = self.mirrored();
+        let (scale, left, top) = fit((width, height), (self.width, self.height));
+        let anchor_x = if mirrored {
+            f64::from(width) - anchor_x
+        } else {
+            anchor_x
+        };
+        let relative_x = cursor_x - anchor_x.mul_add(scale, origin_x + left);
+        let relative_y = cursor_y - anchor_y.mul_add(scale, origin_y + top);
+        let distance = relative_x.hypot(relative_y);
+        if distance <= 1.0 {
+            return (0.0, 0.0);
+        }
+        let reach = (distance / LOOK_FULL_DISTANCE).min(1.0) / distance;
+        let x = (relative_x * reach).clamp(-LOOK_LIMIT.0, LOOK_LIMIT.0);
+        let y = (relative_y * reach).clamp(-LOOK_LIMIT.1, LOOK_LIMIT.1);
+        (if mirrored { -x } else { x }, y)
+    }
+    fn layer_offsets(&self) -> Vec<LayerOffset> {
+        self.look
+            .layers
+            .iter()
+            .map(|layer| {
+                let [max_x, max_y] = layer.tracking.max_offset;
+                let (x, y) = layer.direction;
+                LayerOffset {
+                    x: quantize(x * max_x),
+                    y: quantize(y * max_y),
+                    stretch_x: x.abs().mul_add(layer.tracking.stretch_x, 1.0),
+                }
+            })
+            .collect()
+    }
+    fn look_settled(&self) -> bool {
+        let target = self.look_direction();
+        self.look
+            .layers
+            .iter()
+            .filter(|layer| layer.tracking != TrackingLayer::default())
+            .all(|layer| layer.direction == target)
+    }
+    fn follow_cursor(&mut self) -> Result<(), WaylandError> {
+        if self.look.timer.is_some() || self.look_settled() {
+            return Ok(());
+        }
+        let token = self
+            .loop_handle
+            .insert_source(Timer::immediate(), |_, (), app| app.look_step())
+            .map_err(|e| e.error)
+            .context(CalloopSnafu {
+                thing: "adding look timer",
+            })?;
+        self.look.timer = Some(token);
         Ok(())
+    }
+    fn look_step(&mut self) -> TimeoutAction {
+        let (target_x, target_y) = self.look_direction();
+        let before = self.layer_offsets();
+        let approach = |current: f64, target: f64, ease: f64| {
+            let next = (target - current).mul_add(ease, current);
+            if (target - next).abs() < LOOK_SETTLED {
+                target
+            } else {
+                next
+            }
+        };
+        for layer in &mut self.look.layers {
+            let ease = layer.tracking.ease;
+            let (x, y) = layer.direction;
+            layer.direction = (approach(x, target_x, ease), approach(y, target_y, ease));
+        }
+        if self.layer_offsets() != before {
+            self.invalidate();
+        }
+        if self.look_settled() {
+            self.look.timer = None;
+            return TimeoutAction::Drop;
+        }
+        TimeoutAction::ToDuration(LOOK_STEP)
     }
     fn move_to(&mut self, conn: &Connection, target: Position) {
         let Placement::Placed {
@@ -898,6 +1028,9 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
                 target,
             };
             self.report_center();
+            if let Err(e) = self.follow_cursor() {
+                self.fail(e);
+            }
             if target != applied {
                 self.commit_move(conn, target);
             }
@@ -939,11 +1072,13 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
     fn draw(&mut self) -> Result<(), WaylandError> {
         self.presentation = Presentation::AwaitingFrame;
         let mirrored = self.mirrored();
+        let offsets = self.layer_offsets();
         self.renderer.draw(
             self.width as i32,
             self.height as i32,
             self.frame as u32,
             mirrored,
+            &offsets,
         );
         self.layer
             .wl_surface()
@@ -1228,12 +1363,21 @@ fn create_layer<T: Renderer + 'static>(
     Ok((layer, egl_window, window_handle))
 }
 
-fn input_rect(hitbox: Rect, content: (u32, u32), surface: (u32, u32)) -> (i32, i32, i32, i32) {
+fn quantize(offset: f64) -> f64 {
+    (offset * OFFSET_STEPS_PER_PIXEL).round() / OFFSET_STEPS_PER_PIXEL
+}
+
+fn fit(content: (u32, u32), surface: (u32, u32)) -> (f64, f64, f64) {
     let (content_width, content_height) = (f64::from(content.0), f64::from(content.1));
     let (surface_width, surface_height) = (f64::from(surface.0), f64::from(surface.1));
     let scale = (surface_width / content_width).min(surface_height / content_height);
     let left = (content_width.mul_add(-scale, surface_width)) / 2.0;
     let top = (content_height.mul_add(-scale, surface_height)) / 2.0;
+    (scale, left, top)
+}
+
+fn input_rect(hitbox: Rect, content: (u32, u32), surface: (u32, u32)) -> (i32, i32, i32, i32) {
+    let (scale, left, top) = fit(content, surface);
     let x0 = f64::from(hitbox.x).mul_add(scale, left).floor();
     let y0 = f64::from(hitbox.y).mul_add(scale, top).floor();
     let x1 = f64::from(hitbox.x + hitbox.width)

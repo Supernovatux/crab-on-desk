@@ -43,6 +43,12 @@ pub struct Config {
     pub default_theme: String,
     #[serde(default)]
     pub free_roam: bool,
+    #[serde(default = "tracks_cursor_by_default")]
+    pub track_cursor: bool,
+}
+
+const fn tracks_cursor_by_default() -> bool {
+    true
 }
 
 impl Config {

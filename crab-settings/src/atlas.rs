@@ -26,8 +26,9 @@ use std::{
 
 use crab_common::{
     atlas::{
-        AnimationInfo, Animations, BEHAVIOUR_FILE, MANIFEST_FILE, THUMBNAIL_FILE, ThemeBehaviour,
-        ThemeManifest, opaque_bounds, premultiply_alpha,
+        AnimationInfo, Animations, BEHAVIOUR_FILE, LAYER_SOURCE_DIR, MANIFEST_FILE, Rect,
+        SOURCE_EXTENSION, TEXTURE_EXTENSION, THUMBNAIL_FILE, ThemeBehaviour, ThemeManifest,
+        opaque_bounds, premultiply_alpha,
     },
     toml_file::{self, TomlFileError},
 };
@@ -36,7 +37,7 @@ use image::{
     metadata::LoopCount,
 };
 use ktx2_rw::{BasisCompressionParams, Ktx2Texture, TranscodeFormat, VkFormat};
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
 use crate::themes::Themes;
 
@@ -78,6 +79,10 @@ pub enum AtlasError {
     AnimName {
         source: serde_plain::Error,
     },
+    #[snafu(display("{path:?} does not have the frames of its animation"))]
+    LayerFrames {
+        path: PathBuf,
+    },
     #[snafu(display("Ktx2 error while {thing}."))]
     Ktx2 {
         source: ktx2_rw::Error,
@@ -103,7 +108,23 @@ pub fn gen_atlas(
     create_dir_all(&dir)?;
     let mut animations = BTreeMap::new();
     for (anim, path) in theme_files {
-        let info = encode_animation(path, &dir.join(anim.texture_file()?))?;
+        let clip = decode(path)?;
+        let layer_count = behaviour
+            .tracking
+            .get(anim)
+            .map_or(0, |tracking| tracking.layers.len());
+        let layers = (0..layer_count)
+            .map(|layer| {
+                let source = sources
+                    .join(theme)
+                    .join(LAYER_SOURCE_DIR)
+                    .join(anim.layer_file(layer, SOURCE_EXTENSION)?);
+                let out = dir.join(anim.layer_file(layer, TEXTURE_EXTENSION)?);
+                encode_layer(&clip, &source, &out)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut info = clip.encode(&dir.join(anim.texture_file()?))?;
+        info.layers = layers;
         animations.insert(*anim, info);
     }
     if let Some(idle) = theme_files.get(&Animations::default()) {
@@ -128,7 +149,32 @@ fn write_thumbnail(source: &Path, out: &Path) -> Result<(), AtlasError> {
         .context(ThumbnailSnafu { path: out })
 }
 
-fn encode_animation(source: &Path, out: &Path) -> Result<AnimationInfo, AtlasError> {
+struct Clip {
+    width: u32,
+    height: u32,
+    frames: Vec<Vec<u8>>,
+    frame_delays_ms: Vec<u32>,
+    loops: bool,
+}
+
+impl Clip {
+    const fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    fn encode(self, out: &Path) -> Result<AnimationInfo, AtlasError> {
+        encode_frames(
+            self.width,
+            self.height,
+            &self.frames,
+            self.frame_delays_ms,
+            self.loops,
+            out,
+        )
+    }
+}
+
+fn decode(source: &Path) -> Result<Clip, AtlasError> {
     let decoder = PngDecoder::new(BufReader::new(File::open(source)?))
         .and_then(PngDecoder::apng)
         .context(DecodeSnafu { path: source })?;
@@ -149,15 +195,64 @@ fn encode_animation(source: &Path, out: &Path) -> Result<AnimationInfo, AtlasErr
         .first()
         .context(EmptySnafu { path: source })?
         .dimensions();
-    let layers = frames
+    let frames = frames
         .into_iter()
         .map(|frame| {
             let mut data = frame.into_raw();
             premultiply_alpha(&mut data);
             data
         })
-        .collect::<Vec<_>>();
-    encode_frames(width, height, &layers, frame_delays_ms, loops, out)
+        .collect();
+    Ok(Clip {
+        width,
+        height,
+        frames,
+        frame_delays_ms,
+        loops,
+    })
+}
+
+fn encode_layer(animation: &Clip, source: &Path, out: &Path) -> Result<Rect, AtlasError> {
+    let layer = decode(source)?;
+    ensure!(
+        layer.size() == animation.size() && layer.frame_delays_ms == animation.frame_delays_ms,
+        LayerFramesSnafu { path: source }
+    );
+    let bounds = opaque_bounds(layer.width, layer.frames.iter().map(Vec::as_slice));
+    let bounds = Rect {
+        width: bounds.width.max(1),
+        height: bounds.height.max(1),
+        ..bounds
+    };
+    let cropped: Vec<Vec<u8>> = layer
+        .frames
+        .iter()
+        .map(|frame| crop(frame, layer.width, bounds))
+        .collect();
+    encode_frames(
+        bounds.width,
+        bounds.height,
+        &cropped,
+        layer.frame_delays_ms,
+        layer.loops,
+        out,
+    )?;
+    Ok(bounds)
+}
+
+fn crop(frame: &[u8], width: u32, bounds: Rect) -> Vec<u8> {
+    let row_bytes = width as usize * 4;
+    frame
+        .chunks_exact(row_bytes)
+        .skip(bounds.y as usize)
+        .take(bounds.height as usize)
+        .flat_map(|row| {
+            row.iter()
+                .skip(bounds.x as usize * 4)
+                .take(bounds.width as usize * 4)
+                .copied()
+        })
+        .collect()
 }
 
 pub fn encode_frames(
@@ -207,5 +302,6 @@ pub fn encode_frames(
         frame_delays_ms,
         loops,
         hitbox,
+        layers: Vec::new(),
     })
 }

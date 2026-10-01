@@ -14,15 +14,25 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod desktop;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod process;
-pub mod toml_file;
+use std::env;
+
+pub const HYPRLAND_INSTANCE: &str = "HYPRLAND_INSTANCE_SIGNATURE";
+pub const CURRENT_DESKTOP: &str = "XDG_CURRENT_DESKTOP";
+pub const KDE_DESKTOP: &str = "KDE";
+pub const KWIN_CURSOR_SCRIPT: &str = "crab-on-desk-cursor.js";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compositor {
+    Hyprland,
+    KWin,
+}
+
+#[must_use]
+pub fn detect() -> Option<Compositor> {
+    if env::var_os(HYPRLAND_INSTANCE).is_some() {
+        return Some(Compositor::Hyprland);
+    }
+    env::var(CURRENT_DESKTOP)
+        .is_ok_and(|desktops| desktops.split(':').any(|desktop| desktop == KDE_DESKTOP))
+        .then_some(Compositor::KWin)
+}

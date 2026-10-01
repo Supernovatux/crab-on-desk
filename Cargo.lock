@@ -931,6 +931,7 @@ dependencies = [
  "snafu",
  "wayland-client",
  "wayland-egl",
+ "zbus",
 ]
 
 [[package]]

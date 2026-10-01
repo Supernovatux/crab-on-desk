@@ -21,6 +21,23 @@ use crate::theme::Animation;
 
 pub mod opengl;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerOffset {
+    pub x: f64,
+    pub y: f64,
+    pub stretch_x: f64,
+}
+
+impl Default for LayerOffset {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            stretch_x: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Snafu)]
 pub enum RendererError {
     #[snafu(context(false))]
@@ -35,7 +52,7 @@ pub trait Renderer {
         h: u32,
     ) -> Result<Box<Self>, RendererError>;
     fn set_animation(&mut self, animation: &Animation) -> Result<(), RendererError>;
-    fn draw(&mut self, w: i32, h: i32, frame: u32, mirrored: bool);
+    fn draw(&mut self, w: i32, h: i32, frame: u32, mirrored: bool, offsets: &[LayerOffset]);
     fn replace_window(
         &mut self,
         window: RawWindowHandle,

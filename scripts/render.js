@@ -41,6 +41,20 @@ const DEFAULT_MINI_OFFSET_RATIO = 0.486;
 const REACTION_DEFAULT_MS = { clickLeft: 2500, clickRight: 2500, annoyed: 3500, double: 3500 };
 const DEFAULT_OBJECT_SCALE = { widthRatio: 1.9, heightRatio: 1.3, offsetX: -0.45, offsetY: -0.25 };
 const DEFAULT_LAYOUT = { centerXRatio: 0.5, visibleHeightRatio: 0.58, baselineBottomRatio: 0.05 };
+const DEFAULT_EYE_TRACKING = {
+  states: [],
+  eyeRatioX: 0.5,
+  eyeRatioY: 0.5,
+  maxOffset: 3,
+  bodyScale: 0.33,
+  shadowStretch: 0.15,
+  shadowShift: 0.3,
+  ids: { eyes: "eyes-js", body: "body-js", shadow: "shadow-js" },
+};
+const TRANSITION_EASE = 0.2;
+const DEFAULT_LAYER_EASE = 0.15;
+const DEFAULT_LAYER_MAX_OFFSET = 10;
+const LAYER_SOURCE_DIR = "layers";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 app.commandLine.appendSwitch("force-device-scale-factor", "1");
@@ -91,9 +105,40 @@ function plan(theme) {
     sleep: sleepTimings(timings),
     mini: miniSettings(theme),
     roam_flip_assets: !!theme.roamFlipAssets,
+    tracking: {},
   };
   behaviour.reaction_ms = reactionDurations(theme, behaviour.react_double, double);
-  return { clips, behaviour };
+  const tracking = eyeTracking(theme);
+  const trackedClips = clips.map(([role, file]) => [role, file, tracking && tracking.states.includes(role) ? tracking : null]);
+  return { clips: trackedClips, behaviour };
+}
+
+function eyeTracking(theme) {
+  if (!theme.eyeTracking || !theme.eyeTracking.enabled) return null;
+  const tracking = { ...DEFAULT_EYE_TRACKING, ...theme.eyeTracking };
+  const anchorRatio = [tracking.eyeRatioX, tracking.eyeRatioY];
+  if (tracking.trackingLayers) {
+    const layers = Object.values(tracking.trackingLayers).map((layer) => {
+      const offset = layer.maxOffset || DEFAULT_LAYER_MAX_OFFSET;
+      return {
+        ids: layer.ids || [],
+        classes: layer.classes || [],
+        maxOffset: [offset, offset],
+        ease: layer.ease || DEFAULT_LAYER_EASE,
+        stretchX: 0,
+      };
+    });
+    return { states: tracking.states, anchorRatio, layers };
+  }
+  const { maxOffset, bodyScale, shadowShift, shadowStretch, ids } = tracking;
+  const body = maxOffset * bodyScale;
+  const layer = (id, offset, stretchX) => ({ ids: [id], classes: [], maxOffset: offset, ease: TRANSITION_EASE, stretchX });
+  const layers = [
+    layer(ids.eyes, [maxOffset, maxOffset], 0),
+    layer(ids.body, [body, body], 0),
+    layer(ids.shadow, [body * shadowShift, 0], body * shadowStretch),
+  ];
+  return { states: tracking.states, anchorRatio, layers };
 }
 
 function miniTimings(theme) {
@@ -151,6 +196,18 @@ function behaviourToml(behaviour) {
   for (const key of ["min_display_ms", "auto_return_ms", "reaction_ms"]) {
     lines.push("", `[${key}]`);
     for (const [role, ms] of Object.entries(behaviour[key])) lines.push(`${string(role)} = ${ms}`);
+  }
+  for (const [role, tracking] of Object.entries(behaviour.tracking)) {
+    lines.push("", `[tracking.${string(role)}]`, `anchor = [${tracking.anchor.join(", ")}]`);
+    for (const layer of tracking.layers) {
+      lines.push(
+        "",
+        `[[tracking.${string(role)}.layers]]`,
+        `max_offset = [${layer.max_offset.join(", ")}]`,
+        `ease = ${layer.ease}`,
+        `stretch_x = ${layer.stretch_x}`,
+      );
+    }
   }
   return `${lines.join("\n")}\n`;
 }
@@ -282,7 +339,18 @@ function paintStamped(contents, size, seek) {
   });
 }
 
-async function renderClip(window, size, theme, role, file, source) {
+async function renderFrames(contents, size, frameCount) {
+  const call = (expression) => contents.executeJavaScript(expression);
+  const frames = [];
+  for (let index = 0; index < frameCount; index += 1) {
+    const seek = await call(`showFrame(${index})`);
+    const image = await paintStamped(contents, size, seek);
+    frames.push(image.toPNG());
+  }
+  return frames;
+}
+
+async function renderClip(window, size, theme, role, file, source, tracking) {
   const isImage = !source.endsWith(".svg");
   const contents = window.webContents;
   const call = (expression) => contents.executeJavaScript(expression);
@@ -291,13 +359,17 @@ async function renderClip(window, size, theme, role, file, source) {
   const scriptedCycleMs = scripted ? (runtime.scriptedSvgCycleMs || {})[file] : 0;
   const args = [isImage ? "apng" : "svg", pathToFileURL(source).href, style(theme, role, file, isImage), scriptedCycleMs];
   const info = await call(`loadClip(...${JSON.stringify(args)})`);
-  const frames = [];
-  for (let index = 0; index < info.frameCount; index += 1) {
-    const seek = await call(`showFrame(${index})`);
-    const image = await paintStamped(contents, size, seek);
-    frames.push(image.toPNG());
+  const delays = await call("clipDelays()");
+  const encode = (frames) => apng(frames, delays, info.loops);
+  const runs = tracking && !isImage ? await call(`trackingRuns(${JSON.stringify(tracking)})`) : null;
+  const png = encode(await renderFrames(contents, size, info.frameCount));
+  if (!runs) return { info, png, layers: [] };
+  const layers = [];
+  for (let run = 0; run < runs.layers.length; run += 1) {
+    await call(`showRun(${run})`);
+    layers.push(encode(await renderFrames(contents, size, info.frameCount)));
   }
-  return { info, png: apng(frames, await call("clipDelays()"), info.loops) };
+  return { info, png, layers, tracking: runs };
 }
 
 function createWindow(size) {
@@ -316,11 +388,15 @@ function createWindow(size) {
 
 async function renderJobs(window, size, jobs) {
   for (let job = jobs.shift(); job; job = jobs.shift()) {
-    const { themeName, theme, directory, role, file, source } = job;
-    const { info, png } = await renderClip(window, size, theme, role, file, source);
-    fs.writeFileSync(path.join(directory, `${role}.apng`), png);
+    const { themeName, theme, directory, behaviour, role, file, source, tracking } = job;
+    const clip = await renderClip(window, size, theme, role, file, source, tracking);
+    const { info } = clip;
+    fs.writeFileSync(path.join(directory, `${role}.apng`), clip.png);
+    clip.layers.forEach((png, run) => fs.writeFileSync(path.join(directory, LAYER_SOURCE_DIR, `${role}.${run}.apng`), png));
+    if (clip.tracking) behaviour.tracking[role] = clip.tracking;
     const kind = info.loops ? "loop" : "once";
-    console.log(`${themeName}/${role} <- ${file}: ${info.frameCount} frames, ${kind}${info.lengthMs ? `, ${Math.round(info.lengthMs)} ms` : ""}`);
+    const layers = clip.layers.length ? `, ${clip.layers.length} tracking layers` : "";
+    console.log(`${themeName}/${role} <- ${file}: ${info.frameCount} frames, ${kind}${info.lengthMs ? `, ${Math.round(info.lengthMs)} ms` : ""}${layers}`);
   }
   window.destroy();
 }
@@ -330,19 +406,24 @@ async function main() {
   const size = Number(sizeText);
   if (!reference || !output || !Number.isInteger(size) || themes.length === 0) throw new Error(USAGE);
   const jobs = [];
+  const planned = [];
   for (const themeName of themes) {
     const theme = JSON.parse(fs.readFileSync(path.join(reference, "themes", themeName, "theme.json"), "utf8"));
     const directory = path.join(output, themeName);
-    fs.mkdirSync(directory, { recursive: true });
+    fs.rmSync(path.join(directory, LAYER_SOURCE_DIR), { recursive: true, force: true });
+    fs.mkdirSync(path.join(directory, LAYER_SOURCE_DIR), { recursive: true });
     const { clips, behaviour } = plan(theme);
-    fs.writeFileSync(path.join(directory, "theme.toml"), behaviourToml(behaviour));
-    for (const [role, file] of clips) {
-      jobs.push({ themeName, theme, directory, role, file, source: sourceFile(reference, themeName, file) });
+    planned.push({ directory, behaviour });
+    for (const [role, file, tracking] of clips) {
+      jobs.push({ themeName, theme, directory, behaviour, role, file, tracking, source: sourceFile(reference, themeName, file) });
     }
   }
   const workers = Math.min(Number(process.env.RENDER_JOBS) || os.availableParallelism(), jobs.length);
   const windows = await Promise.all(Array.from({ length: workers }, () => createWindow(size)));
   await Promise.all(windows.map((window) => renderJobs(window, size, jobs)));
+  for (const { directory, behaviour } of planned) {
+    fs.writeFileSync(path.join(directory, "theme.toml"), behaviourToml(behaviour));
+  }
 }
 
 app.whenReady().then(main).then(

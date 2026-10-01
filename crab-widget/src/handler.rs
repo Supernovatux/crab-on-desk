@@ -34,7 +34,6 @@ use crab_common::{
     dirs::get_sibling_executable,
     gui::{DISPLAYS_PAGE, GUI_BINARY, SETTINGS_MODE},
 };
-use hyprland::{data::CursorPosition, shared::HyprData};
 use rustix::{
     io::Errno,
     process::{Pid, PidfdFlags, pidfd_open},
@@ -44,6 +43,7 @@ use snafu::{ResultExt, Snafu};
 use crate::{
     agent::{self, AgentError},
     clicks::Clicks,
+    cursor::{self, CursorSource, Position},
     permission::{self, Prompt},
     process,
     random::roll,
@@ -90,16 +90,18 @@ struct Handler {
     next_prompt: u64,
     settings: HashMap<u32, Child>,
     roaming: bool,
+    track_cursor: bool,
     cursor: Cursor,
     running: bool,
     outcome: Outcome,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Cursor {
-    polling: bool,
+    source: Option<Box<dyn CursorSource>>,
     unavailable: bool,
-    last: Option<(i64, i64)>,
+    looking: bool,
+    last: Option<Position>,
     center: Option<(f64, f64)>,
     spin: Spin,
 }
@@ -108,6 +110,7 @@ pub fn run(
     window: WindowHandle,
     window_events: WindowEvents,
     state: StateMachine,
+    track_cursor: bool,
 ) -> Result<Outcome, HandlerError> {
     let mut event_loop: EventLoop<Handler> = EventLoop::try_new().context(CalloopSnafu {
         thing: "creating event loop",
@@ -178,6 +181,7 @@ pub fn run(
         next_prompt: 0,
         settings: HashMap::new(),
         roaming: false,
+        track_cursor,
         cursor: Cursor::default(),
         running: true,
         outcome: Outcome::Closed,
@@ -415,18 +419,30 @@ impl Handler {
     }
 
     fn wants_cursor(&self) -> bool {
-        !self.cursor.unavailable && (self.roaming || self.state.dizzy_armed())
+        !self.cursor.unavailable
+            && (self.roaming || self.state.dizzy_armed() || self.follows_cursor())
+    }
+
+    fn follows_cursor(&self) -> bool {
+        self.track_cursor && self.state.tracks_cursor()
     }
 
     fn track_cursor(&mut self) {
-        if self.cursor.polling || !self.wants_cursor() {
+        if self.cursor.looking && !self.follows_cursor() {
+            self.look_at(None);
+        }
+        if self.cursor.source.is_some() || !self.wants_cursor() {
             return;
         }
+        let source = match cursor::open() {
+            Ok(source) => source,
+            Err(error) => return self.disable_cursor(&error),
+        };
         let inserted = self
             .handle
             .insert_source(Timer::immediate(), |_, (), handler| handler.poll_cursor());
         match inserted {
-            Ok(_) => self.cursor.polling = true,
+            Ok(_) => self.cursor.source = Some(source),
             Err(error) => self.fail(HandlerError::Calloop {
                 source: error.error,
                 thing: "polling the cursor".to_owned(),
@@ -439,30 +455,52 @@ impl Handler {
             self.stop_cursor();
             return TimeoutAction::Drop;
         }
-        let position = match CursorPosition::get() {
-            Ok(position) => (position.x, position.y),
-            Err(error) => {
-                eprintln!("Cursor tracking disabled: {error}");
-                self.cursor.unavailable = true;
-                self.stop_cursor();
+        let sampled = self.cursor.source.as_mut().map(|source| source.position());
+        let position = match sampled {
+            Some(Ok(Some(position))) => position,
+            Some(Ok(None)) => return TimeoutAction::ToDuration(CURSOR_POLL),
+            Some(Err(error)) => {
+                self.disable_cursor(&error);
                 return TimeoutAction::Drop;
             }
+            None => return TimeoutAction::Drop,
         };
-        let moved = self.cursor.last.is_some_and(|last| last != position);
+        let changed = self.cursor.last != Some(position);
+        let moved = changed && self.cursor.last.is_some();
         self.cursor.last = Some(position);
+        if self.follows_cursor() && (changed || !self.cursor.looking) {
+            let (x, y) = position;
+            self.look_at(Some((f64::from(x), f64::from(y))));
+        }
         if moved {
             self.cursor_moved(position);
         }
         TimeoutAction::ToDuration(CURSOR_POLL)
     }
 
-    const fn stop_cursor(&mut self) {
-        self.cursor.polling = false;
+    fn look_at(&mut self, cursor: Option<(f64, f64)>) {
+        self.cursor.looking = cursor.is_some();
+        if self.window.look_at(cursor).is_err() {
+            self.running = false;
+        }
+    }
+
+    fn disable_cursor(&mut self, error: &cursor::CursorError) {
+        eprintln!(
+            "Cursor tracking disabled: {}",
+            snafu::Report::from_error(error)
+        );
+        self.cursor.unavailable = true;
+        self.stop_cursor();
+    }
+
+    fn stop_cursor(&mut self) {
+        self.cursor.source = None;
         self.cursor.last = None;
         self.cursor.spin.reset();
     }
 
-    fn cursor_moved(&mut self, (x, y): (i64, i64)) {
+    fn cursor_moved(&mut self, (x, y): Position) {
         let now = Instant::now();
         if self.roaming {
             let animation = self.state.end_roam(now);
@@ -472,10 +510,7 @@ impl Handler {
         let Some((center_x, center_y)) = self.cursor.center else {
             return;
         };
-        let offset = (
-            f64::from(x as i32) - center_x,
-            f64::from(y as i32) - center_y,
-        );
+        let offset = (f64::from(x) - center_x, f64::from(y) - center_y);
         if self.cursor.spin.moved(offset, now) {
             let animation = self.state.dizzy(now);
             self.show(animation);

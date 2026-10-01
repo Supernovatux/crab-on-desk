@@ -28,8 +28,10 @@ use glutin::{
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
+use crab_common::atlas::Rect;
+
 use crate::{
-    renderer::{Renderer, RendererError},
+    renderer::{LayerOffset, Renderer, RendererError},
     theme::Animation,
 };
 
@@ -52,11 +54,13 @@ pub enum OpenglError {
 }
 const VERTEX_SHADER: &str = "#version 330 core
 uniform vec2 u_scale;
+uniform vec4 u_rect;
 out vec2 v_uv;
 void main() {
     vec2 corner = vec2(gl_VertexID & 1, gl_VertexID >> 1);
     v_uv = vec2(corner.x, 1.0 - corner.y);
-    gl_Position = vec4((corner * 2.0 - 1.0) * u_scale, 0.0, 1.0);
+    vec2 canvas = mix(u_rect.xy, u_rect.zw, v_uv);
+    gl_Position = vec4(vec2(canvas.x * 2.0 - 1.0, 1.0 - canvas.y * 2.0) * u_scale, 0.0, 1.0);
 }";
 
 const FRAGMENT_SHADER: &str = "#version 330 core
@@ -75,10 +79,12 @@ pub struct Opengl {
     gl_context: glutin::context::PossiblyCurrentContext,
     program: gl::types::GLuint,
     vao: gl::types::GLuint,
-    texture: gl::types::GLuint,
+    textures: Vec<gl::types::GLuint>,
+    layers: Vec<Rect>,
+    canvas: (u32, u32),
     scale_location: gl::types::GLint,
+    rect_location: gl::types::GLint,
     frame_location: gl::types::GLint,
-    frame_aspect: f32,
 }
 
 impl Renderer for Opengl {
@@ -119,9 +125,10 @@ impl Renderer for Opengl {
         });
         let program = unsafe { link_program(VERTEX_SHADER, FRAGMENT_SHADER) }?;
         let scale_location = unsafe { uniform_location(program, "u_scale") }?;
+        let rect_location = unsafe { uniform_location(program, "u_rect") }?;
         let frame_location = unsafe { uniform_location(program, "u_frame") }?;
         let sampler_location = unsafe { uniform_location(program, "u_frames") }?;
-        let (vao, texture) = unsafe { setup_quad(program, sampler_location) };
+        let vao = unsafe { setup_quad(program, sampler_location) };
 
         Ok(Box::new(Self {
             gl_display,
@@ -130,47 +137,72 @@ impl Renderer for Opengl {
             gl_context,
             program,
             vao,
-            texture,
+            textures: Vec::new(),
+            layers: Vec::new(),
+            canvas: (1, 1),
             scale_location,
+            rect_location,
             frame_location,
-            frame_aspect: 1.0,
         }))
     }
     fn set_animation(&mut self, animation: &Animation) -> Result<(), RendererError> {
-        let blocks = animation.blocks();
-        let size = i32::try_from(blocks.len()).ok().context(SizeSnafu)?;
-        unsafe {
-            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
-            gl::CompressedTexImage3D(
-                gl::TEXTURE_2D_ARRAY,
-                0,
-                gl::COMPRESSED_RGBA_BPTC_UNORM,
-                animation.width as i32,
-                animation.height as i32,
-                animation.frame_count as i32,
-                0,
-                size,
-                blocks.as_ptr().cast(),
-            );
+        while self.textures.len() < animation.layers.len() {
+            self.textures.push(unsafe { new_texture() });
         }
-        self.frame_aspect = (f64::from(animation.width) / f64::from(animation.height)) as f32;
+        for (layer, texture) in animation.layers.iter().zip(&self.textures) {
+            let blocks = layer.blocks();
+            let size = i32::try_from(blocks.len()).ok().context(SizeSnafu)?;
+            unsafe {
+                gl::BindTexture(gl::TEXTURE_2D_ARRAY, *texture);
+                gl::CompressedTexImage3D(
+                    gl::TEXTURE_2D_ARRAY,
+                    0,
+                    gl::COMPRESSED_RGBA_BPTC_UNORM,
+                    layer.bounds.width as i32,
+                    layer.bounds.height as i32,
+                    animation.frame_count as i32,
+                    0,
+                    size,
+                    blocks.as_ptr().cast(),
+                );
+            }
+        }
+        self.layers = animation.layers.iter().map(|layer| layer.bounds).collect();
+        self.canvas = (animation.width, animation.height);
         Ok(())
     }
-    fn draw(&mut self, w: i32, h: i32, frame: u32, mirrored: bool) {
-        let surface_aspect = (f64::from(w) / f64::from(h)) as f32;
+    fn draw(&mut self, w: i32, h: i32, frame: u32, mirrored: bool, offsets: &[LayerOffset]) {
+        let surface_aspect = f64::from(w) / f64::from(h);
+        let (canvas_width, canvas_height) = (f64::from(self.canvas.0), f64::from(self.canvas.1));
+        let frame_aspect = canvas_width / canvas_height;
         let direction = if mirrored { -1.0 } else { 1.0 };
-        let scale_x = direction * (self.frame_aspect / surface_aspect).min(1.0);
-        let scale_y = (surface_aspect / self.frame_aspect).min(1.0);
+        let scale_x = direction * (frame_aspect / surface_aspect).min(1.0);
+        let scale_y = (surface_aspect / frame_aspect).min(1.0);
         unsafe {
             gl::Viewport(0, 0, w, h);
             gl::ClearColor(0.0, 0.0, 0.0, 0.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
             gl::UseProgram(self.program);
-            gl::Uniform2f(self.scale_location, scale_x, scale_y);
+            gl::Uniform2f(self.scale_location, scale_x as f32, scale_y as f32);
             gl::Uniform1i(self.frame_location, frame as i32);
             gl::BindVertexArray(self.vao);
-            gl::BindTexture(gl::TEXTURE_2D_ARRAY, self.texture);
-            gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+        }
+        for (index, (bounds, texture)) in self.layers.iter().zip(&self.textures).enumerate() {
+            let offset = offsets.get(index).copied().unwrap_or_default();
+            let half_width = f64::from(bounds.width) / 2.0 * offset.stretch_x;
+            let center_x = f64::from(bounds.x) + f64::from(bounds.width) / 2.0 + offset.x;
+            let top = f64::from(bounds.y) + offset.y;
+            unsafe {
+                gl::Uniform4f(
+                    self.rect_location,
+                    ((center_x - half_width) / canvas_width) as f32,
+                    (top / canvas_height) as f32,
+                    ((center_x + half_width) / canvas_width) as f32,
+                    ((top + f64::from(bounds.height)) / canvas_height) as f32,
+                );
+                gl::BindTexture(gl::TEXTURE_2D_ARRAY, *texture);
+                gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
+            }
         }
     }
     fn replace_window(
@@ -240,7 +272,7 @@ unsafe fn compile_shader(
             let mut buf = vec![0u8; len as usize];
             gl::GetShaderInfoLog(shader, len, std::ptr::null_mut(), buf.as_mut_ptr().cast());
             Err(OpenglError::Program {
-                thing: String::from_utf8_lossy_owned(buf),
+                thing: String::from_utf8_lossy(&buf).into_owned(),
             })?;
         }
         Ok(shader)
@@ -268,7 +300,7 @@ unsafe fn link_program(
             let mut buf = vec![0u8; len as usize];
             gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast());
             Err(OpenglError::Program {
-                thing: String::from_utf8_lossy_owned(buf),
+                thing: String::from_utf8_lossy(&buf).into_owned(),
             })?;
         }
 
@@ -293,38 +325,31 @@ unsafe fn uniform_location(
     Ok(location)
 }
 
+unsafe fn new_texture() -> gl::types::GLuint {
+    unsafe {
+        let mut texture = 0;
+        gl::GenTextures(1, &raw mut texture);
+        gl::BindTexture(gl::TEXTURE_2D_ARRAY, texture);
+        for (parameter, value) in [
+            (gl::TEXTURE_MIN_FILTER, gl::LINEAR),
+            (gl::TEXTURE_MAG_FILTER, gl::LINEAR),
+            (gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE),
+            (gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE),
+        ] {
+            gl::TexParameteri(gl::TEXTURE_2D_ARRAY, parameter, value as i32);
+        }
+        gl::TexParameteri(gl::TEXTURE_2D_ARRAY, gl::TEXTURE_MAX_LEVEL, 0);
+        texture
+    }
+}
+
 unsafe fn setup_quad(
     program: gl::types::GLuint,
     sampler_location: gl::types::GLint,
-) -> (gl::types::GLuint, gl::types::GLuint) {
+) -> gl::types::GLuint {
     unsafe {
         let mut vao = 0;
-        let mut texture = 0;
         gl::GenVertexArrays(1, &raw mut vao);
-        gl::GenTextures(1, &raw mut texture);
-
-        gl::BindTexture(gl::TEXTURE_2D_ARRAY, texture);
-        gl::TexParameteri(
-            gl::TEXTURE_2D_ARRAY,
-            gl::TEXTURE_MIN_FILTER,
-            gl::LINEAR as i32,
-        );
-        gl::TexParameteri(
-            gl::TEXTURE_2D_ARRAY,
-            gl::TEXTURE_MAG_FILTER,
-            gl::LINEAR as i32,
-        );
-        gl::TexParameteri(
-            gl::TEXTURE_2D_ARRAY,
-            gl::TEXTURE_WRAP_S,
-            gl::CLAMP_TO_EDGE as i32,
-        );
-        gl::TexParameteri(
-            gl::TEXTURE_2D_ARRAY,
-            gl::TEXTURE_WRAP_T,
-            gl::CLAMP_TO_EDGE as i32,
-        );
-        gl::TexParameteri(gl::TEXTURE_2D_ARRAY, gl::TEXTURE_MAX_LEVEL, 0);
 
         gl::UseProgram(program);
         gl::Uniform1i(sampler_location, 0);
@@ -333,6 +358,6 @@ unsafe fn setup_quad(
         gl::Enable(gl::BLEND);
         gl::BlendFunc(gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
 
-        (vao, texture)
+        vao
     }
 }

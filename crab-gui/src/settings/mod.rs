@@ -76,6 +76,7 @@ impl Page {
 enum Message {
     Show(Page),
     FreeRoam(bool),
+    TrackCursor(bool),
     SelectTheme(String),
     Hooks(bool),
     Finish,
@@ -103,6 +104,7 @@ struct Settings {
     colors: &'static Colors,
     theme: Option<String>,
     free_roam: bool,
+    track_cursor: bool,
     themes: Vec<ThemeEntry>,
     hooks: Hooks,
     outputs: Result<Vec<Output>, String>,
@@ -199,6 +201,7 @@ impl Settings {
             page,
             colors,
             free_roam: config.as_ref().is_some_and(|config| config.free_roam),
+            track_cursor: config.as_ref().is_none_or(|config| config.track_cursor),
             theme: config.map(|config| config.default_theme),
             themes: Vec::new(),
             hooks: Hooks::Missing,
@@ -241,6 +244,10 @@ impl Settings {
                 self.free_roam = enabled;
                 self.save();
             }
+            Message::TrackCursor(enabled) => {
+                self.track_cursor = enabled;
+                self.save();
+            }
             Message::SelectTheme(theme) => {
                 self.theme = Some(theme);
                 self.save();
@@ -281,6 +288,7 @@ impl Settings {
         self.theme.clone().map(|default_theme| Config {
             default_theme,
             free_roam: self.free_roam,
+            track_cursor: self.track_cursor,
         })
     }
 

@@ -23,6 +23,7 @@ pub const TEXTURE_EXTENSION: &str = "ktx2";
 pub const SOURCE_EXTENSION: &str = "apng";
 pub const BEHAVIOUR_FILE: &str = "theme.toml";
 pub const THUMBNAIL_FILE: &str = "thumbnail.png";
+pub const LAYER_SOURCE_DIR: &str = "layers";
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -102,6 +103,22 @@ pub struct ThemeBehaviour {
     pub sleep: SleepTimings,
     pub mini: Option<Mini>,
     pub roam_flip_assets: bool,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tracking: BTreeMap<Animations, Tracking>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tracking {
+    pub anchor: [f64; 2],
+    pub layers: Vec<TrackingLayer>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrackingLayer {
+    pub max_offset: [f64; 2],
+    pub ease: f64,
+    #[serde(default)]
+    pub stretch_x: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -151,6 +168,8 @@ pub struct AnimationInfo {
     pub frame_delays_ms: Vec<u32>,
     pub loops: bool,
     pub hitbox: Rect,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<Rect>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,6 +193,7 @@ impl ThemeBehaviour {
                     .chain(&self.juggling_tiers)
                     .map(|tier| tier.animation),
             )
+            .chain(self.tracking.keys().copied())
     }
 }
 
@@ -196,6 +216,10 @@ impl Animations {
 
     pub fn texture_file(&self) -> Result<String, serde_plain::Error> {
         serde_plain::to_string(self).map(|name| format!("{name}.{TEXTURE_EXTENSION}"))
+    }
+
+    pub fn layer_file(&self, layer: usize, extension: &str) -> Result<String, serde_plain::Error> {
+        serde_plain::to_string(self).map(|name| format!("{name}.{layer}.{extension}"))
     }
 }
 

@@ -14,15 +14,12 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::env;
-
+use crab_common::desktop::{self, Compositor};
 use hyprland::{
     dispatch::{Dispatch, DispatchType, WindowIdentifier},
     error::HyprError,
 };
 use snafu::{ResultExt, Snafu};
-
-const HYPRLAND_INSTANCE: &str = "HYPRLAND_INSTANCE_SIGNATURE";
 
 #[derive(Debug, Snafu)]
 pub enum DesktopError {
@@ -45,5 +42,8 @@ impl Desktop for Hyprland {
 
 #[must_use]
 pub fn detect() -> Option<Box<dyn Desktop>> {
-    env::var_os(HYPRLAND_INSTANCE).map(|_| Box::new(Hyprland) as Box<dyn Desktop>)
+    match desktop::detect()? {
+        Compositor::Hyprland => Some(Box::new(Hyprland)),
+        Compositor::KWin => None,
+    }
 }

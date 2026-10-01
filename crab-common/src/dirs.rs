@@ -25,9 +25,10 @@ use snafu::{ResultExt, Snafu};
 
 use crate::{
     agent::AGENT_SOCKET,
-    atlas::{Animations, MANIFEST_FILE},
+    atlas::{Animations, MANIFEST_FILE, TEXTURE_EXTENSION},
     claude::{CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR_VAR, CLAUDE_SETTINGS_FILE},
     config::CONFIG_FILE,
+    desktop::KWIN_CURSOR_SCRIPT,
     gui::{SETTINGS_LOCK, WIDGET_LOCK},
 };
 
@@ -66,6 +67,10 @@ pub fn get_agent_socket() -> Result<PathBuf, CommonError> {
 
 pub fn get_settings_lock() -> Result<PathBuf, CommonError> {
     Ok(get_agent_socket()?.with_file_name(SETTINGS_LOCK))
+}
+
+pub fn get_kwin_cursor_script() -> Result<PathBuf, CommonError> {
+    Ok(get_agent_socket()?.with_file_name(KWIN_CURSOR_SCRIPT))
 }
 
 pub fn get_widget_lock() -> Result<PathBuf, CommonError> {
@@ -130,6 +135,17 @@ fn built_themes(root: &Path) -> Vec<(String, PathBuf)> {
         .filter(|dir| dir.join(MANIFEST_FILE).is_file())
         .filter_map(|dir| Some((dir.file_name()?.to_str()?.to_owned(), dir)))
         .collect()
+}
+
+pub fn get_layer_texture(
+    theme_dir: &Path,
+    animation: Animations,
+    layer: usize,
+) -> Result<PathBuf, CommonError> {
+    let file = animation
+        .layer_file(layer, TEXTURE_EXTENSION)
+        .context(AnimationNameSnafu { animation })?;
+    Ok(theme_dir.join(file))
 }
 
 pub fn get_animation_texture(

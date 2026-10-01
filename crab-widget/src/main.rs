@@ -85,7 +85,7 @@ fn main() -> Result<(), WidgetError> {
         Instant::now(),
     );
     let (window, window_events) = WindowHandle::spawn(theme, Animations::default())?;
-    if handler::run(window, window_events, state)? == Outcome::Restart {
+    if handler::run(window, window_events, state, config.track_cursor)? == Outcome::Restart {
         return Err(restart()).context(RestartSnafu);
     }
     Ok(())

@@ -182,6 +182,15 @@ impl Settings {
                         .style(move |theme, status| style::switch(colors, theme, status))
                         .into(),
                 ),
+                self.row(
+                    "Track cursor",
+                    Some("Eyes follow the mouse while idle."),
+                    toggler(self.track_cursor)
+                        .size(SWITCH_SIZE)
+                        .on_toggle(Message::TrackCursor)
+                        .style(move |theme, status| style::switch(colors, theme, status))
+                        .into(),
+                ),
             ],
         )
     }

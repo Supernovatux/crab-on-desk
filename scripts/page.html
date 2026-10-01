@@ -35,6 +35,12 @@
 const FRAME_RATE = 15;
 const FRAME_MS = 1000 / FRAME_RATE;
 const MAX_LOOP_MS = 20000;
+const SVG_NS = "http://www.w3.org/2000/svg";
+const NON_RENDERING = new Set([
+  "defs", "style", "title", "desc", "metadata", "script", "clipPath", "mask",
+  "linearGradient", "radialGradient", "pattern", "filter", "marker", "symbol",
+]);
+const RUN_ATTRIBUTE = "data-crab-run";
 const VIRTUAL_CLOCK = `<script><![CDATA[
 (() => {
   let now = 0;
@@ -106,6 +112,7 @@ async function loadSvg(url, style, scriptedCycleMs) {
   clip = {
     frameCount,
     loops,
+    object,
     delays: Array(frameCount).fill([1, FRAME_RATE]),
     seek: (index) => {
       const time = Math.min(index * FRAME_MS, loops ? Infinity : lengthMs);
@@ -177,6 +184,78 @@ async function loadApng(url, style) {
   return { frameCount: frames.length, loops };
 }
 
+function rendered(element) {
+  return element.namespaceURI === SVG_NS && !NON_RENDERING.has(element.localName);
+}
+
+function pixelsPerUnit(element) {
+  const matrix = element.parentNode.getScreenCTM();
+  return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)];
+}
+
+function trackedElements(document, layers) {
+  const tracked = new Map();
+  layers.forEach((layer, index) => {
+    const selectors = [...layer.ids.map((id) => `#${CSS.escape(id)}`), ...layer.classes.map((name) => `.${CSS.escape(name)}`)];
+    if (selectors.length === 0) return;
+    for (const element of document.querySelectorAll(selectors.join(","))) {
+      if (!tracked.has(element)) tracked.set(element, layer);
+    }
+  });
+  return tracked;
+}
+
+function paintedLeaves(root, tracked) {
+  const leaves = [];
+  const visit = (element, chain) => {
+    const own = tracked.has(element) ? [...chain, element] : chain;
+    const children = [...element.children].filter(rendered);
+    if (children.length === 0 || element.localName === "text") leaves.push({ element, chain: own });
+    else for (const child of children) visit(child, own);
+  };
+  visit(root, []);
+  return leaves;
+}
+
+function sameLayers(tracked, a, b) {
+  return a.length === b.length && a.every((element, index) => tracked.get(element) === tracked.get(b[index]));
+}
+
+window.trackingRuns = ({ layers, anchorRatio }) => {
+  const document = clip.object.contentDocument;
+  const tracked = trackedElements(document, layers);
+  if (tracked.size === 0) return null;
+  const runs = [];
+  for (const leaf of paintedLeaves(document.documentElement, tracked)) {
+    const last = runs[runs.length - 1];
+    if (last && sameLayers(tracked, last.chain, leaf.chain)) last.leaves.push(leaf.element);
+    else runs.push({ chain: leaf.chain, leaves: [leaf.element] });
+  }
+  runs.forEach((run, index) => run.leaves.forEach((leaf) => leaf.setAttribute(RUN_ATTRIBUTE, index)));
+  const style = document.createElementNS(SVG_NS, "style");
+  style.id = "crab-run-style";
+  document.documentElement.append(style);
+  const box = clip.object.getBoundingClientRect();
+  return {
+    anchor: [box.left + box.width * anchorRatio[0], box.top + box.height * anchorRatio[1]],
+    layers: runs.map(({ chain }) => {
+      const innermost = tracked.get(chain[chain.length - 1]);
+      const max_offset = chain.reduce(
+        ([x, y], element) => {
+          const [unitX, unitY] = pixelsPerUnit(element);
+          const [offsetX, offsetY] = tracked.get(element).maxOffset;
+          return [x + offsetX * unitX, y + offsetY * unitY];
+        },
+        [0, 0],
+      );
+      return { max_offset, ease: innermost ? innermost.ease : 0, stretch_x: innermost ? innermost.stretchX : 0 };
+    }),
+  };
+};
+window.showRun = (run) => {
+  clip.object.contentDocument.getElementById("crab-run-style").textContent =
+    `[${RUN_ATTRIBUTE}] { visibility: hidden !important; } [${RUN_ATTRIBUTE}="${run}"] { visibility: visible !important; }`;
+};
 window.loadClip = (kind, url, style, scriptedCycleMs) =>
   kind === "svg" ? loadSvg(url, style, scriptedCycleMs) : loadApng(url, style);
 window.clipDelays = () => clip.delays;

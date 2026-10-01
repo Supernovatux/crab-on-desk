@@ -353,6 +353,11 @@ impl StateMachine {
                 .contains_key(&Animations::Dizzy)
     }
 
+    #[must_use]
+    pub fn tracks_cursor(&self) -> bool {
+        self.user_idle_since.is_none() && self.behaviour.tracking.contains_key(&self.animation())
+    }
+
     pub fn dizzy(&mut self, now: Instant) -> Option<Animations> {
         if !self.dizzy_armed() {
             return None;

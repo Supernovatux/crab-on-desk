@@ -16,6 +16,7 @@
 
 pub mod agent;
 pub mod clicks;
+pub mod cursor;
 pub mod handler;
 pub mod permission;
 pub mod process;

@@ -64,11 +64,12 @@ pub enum WindowEvent {
     OpenSettings,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WindowCommand {
     Show(Animations),
     MoveToOutput(String),
     Roam(bool),
+    Look(Option<(f64, f64)>),
 }
 
 trait Window {
@@ -131,6 +132,10 @@ impl WindowHandle {
 
     pub fn set_roaming(&self, roaming: bool) -> Result<(), WindowError> {
         self.send(WindowCommand::Roam(roaming))
+    }
+
+    pub fn look_at(&self, cursor: Option<(f64, f64)>) -> Result<(), WindowError> {
+        self.send(WindowCommand::Look(cursor))
     }
 
     fn send(&self, command: WindowCommand) -> Result<(), WindowError> {
