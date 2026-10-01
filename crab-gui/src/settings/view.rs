@@ -138,7 +138,11 @@ impl Settings {
         let finish = row![
             space().width(Fill),
             self.soft(
-                "Finish",
+                if self.has_hooks() || self.needs_hooks_warning() {
+                    "Finish"
+                } else {
+                    "Finish anyway"
+                },
                 Tone::Accent,
                 self.theme.is_some().then_some(Message::Finish),
             ),

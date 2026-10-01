@@ -43,6 +43,8 @@ const WINDOW_SIZE: Size = Size::new(800.0, 560.0);
 const MIN_WINDOW_SIZE: Size = Size::new(640.0, 480.0);
 const SAVED_OFFLINE: &str = "Saved. The widget is not running; it applies at the next start.";
 const SAVED: &str = "Saved. The widget is restarting.";
+const NO_HOOKS: &str =
+    "No agent hooks are installed, so nothing will drive the crab. Turn on Claude Code hooks, or press Finish anyway.";
 
 #[derive(Debug, Snafu)]
 pub enum SettingsError {
@@ -92,6 +94,12 @@ enum Hooks {
     Unknown(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HooksWarning {
+    Unseen,
+    Shown,
+}
+
 #[derive(Debug, Clone)]
 struct Toast {
     text: String,
@@ -107,6 +115,7 @@ struct Settings {
     track_cursor: bool,
     themes: Vec<ThemeEntry>,
     hooks: Hooks,
+    hooks_warning: HooksWarning,
     outputs: Result<Vec<Output>, String>,
     toast: Option<Toast>,
     size: Pin,
@@ -205,6 +214,7 @@ impl Settings {
             theme: config.map(|config| config.default_theme),
             themes: Vec::new(),
             hooks: Hooks::Missing,
+            hooks_warning: HooksWarning::Unseen,
             outputs: Ok(Vec::new()),
             toast: None,
             size: Pin::Fixed,
@@ -309,6 +319,11 @@ impl Settings {
         let Some(config) = self.config() else {
             return Task::none();
         };
+        if self.needs_hooks_warning() {
+            self.hooks_warning = HooksWarning::Shown;
+            self.fail(NO_HOOKS.to_owned());
+            return Task::none();
+        }
         match config.save().map_err(report).and_then(|()| start_widget()) {
             Ok(()) => iced::exit(),
             Err(error) => {
@@ -316,6 +331,14 @@ impl Settings {
                 Task::none()
             }
         }
+    }
+
+    fn needs_hooks_warning(&self) -> bool {
+        self.hooks_warning == HooksWarning::Unseen && !self.has_hooks()
+    }
+
+    const fn has_hooks(&self) -> bool {
+        matches!(self.hooks, Hooks::Installed)
     }
 
     fn apply(&mut self, online: &str, offline: &str) {
