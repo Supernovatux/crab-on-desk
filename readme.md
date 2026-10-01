@@ -3,6 +3,31 @@ A pixel pet for coding agents.
 
 This project is a Linux-focused Rust clone of [rullerzhou-afk/clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk). Thanks to the original project for the ideas, UI layouts, animations, state mappings, etc.
 
+## Goals
+1. Use minimal RAM and CPU. (Currently uses about 84MB of ram and almost 0 CPU.)
+2. Make the widget feature-complete with the original project.
+
+## Features
+1. GPU-accelerated rendering.
+2. Wayland support.
+3. Supports multiple displays.
+
+### Rendering backend~~s~~
+1. OpenGL
+
+Vulkan will be added in the future.
+
+### Tested desktop environments
+1. Hyprland (note: background blur needs to be disabled manually.)
+2. KDE Plasma (Wayland)
+
+Other OSes and X11 could be supported fairly easily by implementing the needed interfaces. Feel free to open a PR.
+
+### Supported agent~~s~~
+- Claude Code
+
+I don't use other agents, so please feel free to open a PR.
+
 ## Installation
 ### Arch Linux and family
 AUR packages are planned but not published yet:
@@ -43,30 +68,6 @@ make uninstall themes-uninstall
 ```
 Turn the Claude Code hooks off in the settings window first, otherwise Claude will keep calling a `crab-hook` that no longer exists.
 
-## Goals
-1. Use minimal RAM and CPU. (Currently uses about 84MB of ram and almost 0 CPU.)
-2. Make the widget feature-complete with the original project.
-
-## Features
-1. GPU-accelerated rendering.
-2. Wayland support.
-3. Supports multiple displays.
-
-### Rendering backend~~s~~
-1. OpenGL
-
-Vulkan will be added in the future.
-
-### Tested desktop environments
-1. Hyprland (note: background blur needs to be disabled manually.)
-2. KDE Plasma (Wayland)
-
-Other OSes and X11 could be supported fairly easily by implementing the needed interfaces. Feel free to open a PR.
-
-### Supported agent~~s~~
-- Claude Code
-
-I don't use other agents, so please feel free to open a PR.
 
 ## Themes
 This repository does not contain any themes.
