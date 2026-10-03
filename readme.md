@@ -11,6 +11,10 @@ This project is a Linux-focused Rust clone of [rullerzhou-afk/clawd-on-desk](htt
 1. GPU-accelerated rendering.
 2. Wayland support.
 3. Supports multiple displays.
+4. Reacts to Claude Code sessions (thinking, working, subagents, errors, notifications).
+5. Permission prompts next to the pet: allow/deny tools, review plans, answer questions.
+6. Drag, click reactions, docking at the screen edge, free roam, sleeping when you are away.
+7. Eyes that follow the cursor (Hyprland and KDE Plasma).
 
 ### Rendering backend~~s~~
 1. OpenGL
@@ -30,8 +34,14 @@ I don't use other agents, so please feel free to open a PR.
 
 ## Installation
 ### Arch Linux and family
-AUR packages are planned but not published yet:
-- `crab-on-desk-git`: the widget, the Claude Code hook, the settings window and `crab-codex`.
+Two packages are on the AUR:
+- [`crab-on-desk-git`](https://aur.archlinux.org/packages/crab-on-desk-git): the widget, the Claude Code hook, the settings window and `crab-codex`.
+- [`crab-on-desk-themes`](https://aur.archlinux.org/packages/crab-on-desk-themes): the Clawd, Calico and Cloudling themes of the original project. They are rendered on your machine while the package builds (this needs Electron and takes a few minutes), because they are not openly licensed and so are not shipped prebuilt.
+
+```sh
+paru -S crab-on-desk-git crab-on-desk-themes
+```
+Then start `crab-widget` (see below).
 
 ### From source
 Requirements:
@@ -82,6 +92,7 @@ The themes of the original project are not licensed under an open-source license
 ```sh
 make themes-install
 ```
+On Arch, the `crab-on-desk-themes` package does the same.
 
 ## AI usage
 I wanted to make this widget to get an feel of OpenGL. I wrote all the code up to the point where the first animation worked. After that, all code was written by Claude Opus 5.5. I did monitor the edits partly.
