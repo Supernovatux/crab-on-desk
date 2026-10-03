@@ -438,8 +438,9 @@ impl Handler {
     }
 
     fn wants_cursor(&self) -> bool {
-        !self.cursor.unavailable
-            && (self.roaming || self.state.dizzy_armed() || self.follows_cursor())
+        self.track_cursor
+            && !self.cursor.unavailable
+            && (self.roaming || self.state.dizzy_armed() || self.state.tracks_cursor())
     }
 
     fn follows_cursor(&self) -> bool {

@@ -188,7 +188,7 @@ impl Settings {
                 ),
                 self.row(
                     "Track cursor",
-                    Some("Eyes follow the mouse while idle."),
+                    Some("Eyes follow the mouse, circling the crab makes it dizzy."),
                     toggler(self.track_cursor)
                         .size(SWITCH_SIZE)
                         .on_toggle(Message::TrackCursor)
