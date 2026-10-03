@@ -28,7 +28,10 @@ use crate::{
     atlas::{Animations, MANIFEST_FILE, TEXTURE_EXTENSION},
     claude::{CLAUDE_CONFIG_DIR, CLAUDE_CONFIG_DIR_VAR, CLAUDE_SETTINGS_FILE},
     config::CONFIG_FILE,
-    desktop::KWIN_CURSOR_SCRIPT,
+    desktop::{
+        HYPRLAND_INSTANCE, HYPRLAND_RUNTIME_DIR, HYPRLAND_SOCKET, KWIN_CURSOR_SCRIPT,
+        KWIN_PLACEMENT_SCRIPT,
+    },
     gui::{SETTINGS_LOCK, WIDGET_LOCK},
 };
 
@@ -43,6 +46,7 @@ pub enum CommonError {
     UnableToGetCache,
     UnableToGetRuntime,
     UnableToGetHome,
+    UnableToGetHyprland,
     #[snafu(display("Unable to locate the running executable"))]
     CurrentExe {
         source: io::Error,
@@ -71,6 +75,18 @@ pub fn get_settings_lock() -> Result<PathBuf, CommonError> {
 
 pub fn get_kwin_cursor_script() -> Result<PathBuf, CommonError> {
     Ok(get_agent_socket()?.with_file_name(KWIN_CURSOR_SCRIPT))
+}
+
+pub fn get_kwin_placement_script() -> Result<PathBuf, CommonError> {
+    Ok(get_agent_socket()?.with_file_name(KWIN_PLACEMENT_SCRIPT))
+}
+
+pub fn get_hyprland_socket() -> Result<PathBuf, CommonError> {
+    let instance = env::var_os(HYPRLAND_INSTANCE).ok_or(CommonError::UnableToGetHyprland)?;
+    Ok(get_agent_socket()?
+        .with_file_name(HYPRLAND_RUNTIME_DIR)
+        .join(instance)
+        .join(HYPRLAND_SOCKET))
 }
 
 pub fn get_widget_lock() -> Result<PathBuf, CommonError> {

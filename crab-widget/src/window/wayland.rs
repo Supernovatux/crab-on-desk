@@ -70,6 +70,7 @@ use wayland_egl::WlEglSurface;
 use super::{Side, WindowCommand, WindowEvent};
 use crate::random::roll;
 use crate::{
+    placement::{Area, Location},
     renderer::{LayerOffset, Renderer, RendererError},
     theme::{Theme, ThemeError},
 };
@@ -773,7 +774,7 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
             }
         }
     }
-    fn global_origin(&self) -> Option<(f64, f64)> {
+    fn location(&self) -> Option<Location> {
         let output = self
             .output
             .as_ref()
@@ -787,15 +788,34 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
                 (output_height - self.height as i32) / 2,
             ),
         };
-        Some((f64::from(output_x + x), f64::from(output_y + y)))
+        Some(Location {
+            output_name: output.name,
+            output: Area {
+                x: output_x,
+                y: output_y,
+                width: output_width,
+                height: output_height,
+            },
+            crab: Area {
+                x: output_x + x,
+                y: output_y + y,
+                width: self.width as i32,
+                height: self.height as i32,
+            },
+        })
     }
-    fn report_center(&self) {
-        if let Some((x, y)) = self.global_origin() {
-            let center = (
-                x + f64::from(self.width) / 2.0,
-                y + f64::from(self.height) / 2.0,
-            );
-            let _ = self.events.send(WindowEvent::Moved { center });
+    fn global_origin(&self) -> Option<(f64, f64)> {
+        self.location()
+            .map(|location| (f64::from(location.crab.x), f64::from(location.crab.y)))
+    }
+    fn output_changed(&self, output: &wl_output::WlOutput) {
+        if self.output.as_ref() == Some(output) {
+            self.report_location();
+        }
+    }
+    fn report_location(&self) {
+        if let Some(location) = self.location() {
+            let _ = self.events.send(WindowEvent::Moved(location));
         }
     }
     fn refresh_orientation(&mut self) -> Result<(), WaylandError> {
@@ -1027,7 +1047,7 @@ impl<T: Renderer + 'static> _WaylandWindow<T> {
                 in_flight: None,
                 target,
             };
-            self.report_center();
+            self.report_location();
             if let Err(e) = self.follow_cursor() {
                 self.fail(e);
             }
@@ -1135,7 +1155,7 @@ impl<T: Renderer + 'static> CompositorHandler for _WaylandWindow<T> {
         if self.output.is_none() {
             self.output = Some(output.clone());
         }
-        self.report_center();
+        self.report_location();
     }
 
     fn surface_leave(
@@ -1147,14 +1167,23 @@ impl<T: Renderer + 'static> CompositorHandler for _WaylandWindow<T> {
     ) {
     }
 }
-impl<T: Renderer> OutputHandler for _WaylandWindow<T> {
+impl<T: Renderer + 'static> OutputHandler for _WaylandWindow<T> {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
 
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        self.output_changed(&output);
+    }
 
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.output_changed(&output);
+    }
 
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }

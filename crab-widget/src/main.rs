@@ -14,13 +14,7 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    env, io,
-    os::unix::process::CommandExt,
-    path::PathBuf,
-    process::Command,
-    time::Instant,
-};
+use std::{env, io, os::unix::process::CommandExt, path::PathBuf, process::Command, time::Instant};
 
 use crab_common::{
     atlas::Animations,
@@ -85,7 +79,7 @@ fn main() -> Result<(), WidgetError> {
         Instant::now(),
     );
     let (window, window_events) = WindowHandle::spawn(theme, Animations::default())?;
-    if handler::run(window, window_events, state, config.track_cursor)? == Outcome::Restart {
+    if handler::run(window, window_events, state, &config)? == Outcome::Restart {
         return Err(restart()).context(RestartSnafu);
     }
     Ok(())

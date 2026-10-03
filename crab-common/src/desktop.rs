@@ -20,6 +20,9 @@ pub const HYPRLAND_INSTANCE: &str = "HYPRLAND_INSTANCE_SIGNATURE";
 pub const CURRENT_DESKTOP: &str = "XDG_CURRENT_DESKTOP";
 pub const KDE_DESKTOP: &str = "KDE";
 pub const KWIN_CURSOR_SCRIPT: &str = "crab-on-desk-cursor.js";
+pub const KWIN_PLACEMENT_SCRIPT: &str = "crab-on-desk-placement.js";
+pub const HYPRLAND_RUNTIME_DIR: &str = "hypr";
+pub const HYPRLAND_SOCKET: &str = ".socket.sock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compositor {

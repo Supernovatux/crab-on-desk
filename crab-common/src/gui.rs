@@ -24,6 +24,7 @@ pub const SETTINGS_LOCK: &str = "crab-on-desk-settings.lock";
 pub const WIDGET_LOCK: &str = "crab-on-desk-widget.lock";
 pub const SETTINGS_APP_ID: &str = "com.supernovatux.CrabOnDesk";
 pub const PERMISSION_APP_ID: &str = "com.supernovatux.CrabOnDesk.Permission";
+pub const PERMISSION_MAX_HEIGHT: u16 = 608;
 pub const GENERATE_COMMAND: &str = "generate";
 pub const INSTALL_HOOKS_COMMAND: &str = "install-hooks";
 pub const UNINSTALL_HOOKS_COMMAND: &str = "uninstall-hooks";

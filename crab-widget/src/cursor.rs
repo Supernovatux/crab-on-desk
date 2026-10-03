@@ -14,24 +14,18 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    fs, io,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use crab_common::{
     desktop::{self, Compositor},
     dirs::{CommonError, get_kwin_cursor_script},
 };
 use hyprland::{data::CursorPosition, error::HyprError, shared::HyprData};
-use snafu::{ResultExt, Snafu, ensure};
-use zbus::{blocking::Connection, interface};
+use snafu::{ResultExt, Snafu};
+use zbus::interface;
 
-const KWIN_SERVICE: &str = "org.kde.KWin";
-const KWIN_SCRIPTING_PATH: &str = "/Scripting";
-const KWIN_SCRIPTING: &str = "org.kde.kwin.Scripting";
-const KWIN_SCRIPT: &str = "org.kde.kwin.Script";
+use crate::kwin::{self, KWinError, Script};
+
 const KWIN_PLUGIN: &str = "crab-on-desk-cursor";
 const RECEIVER_PATH: &str = "/com/supernovatux/CrabOnDesk/Cursor";
 const RECEIVER_INTERFACE: &str = "com.supernovatux.CrabOnDesk.Cursor";
@@ -48,15 +42,10 @@ pub enum CursorError {
     Hyprland { source: HyprError },
     #[snafu(context(false))]
     Dir { source: CommonError },
-    #[snafu(display("D-Bus error while {thing}"))]
-    Bus {
-        source: Box<zbus::Error>,
-        thing: String,
-    },
-    #[snafu(display("Unable to write the KWin script {path:?}"))]
-    Script { source: io::Error, path: PathBuf },
-    #[snafu(display("KWin refused to load the cursor script"))]
-    Load,
+    #[snafu(context(false))]
+    KWin { source: KWinError },
+    #[snafu(display("Unable to serve the cursor receiver"))]
+    Serve { source: Box<zbus::Error> },
     #[snafu(display("The KWin cursor receiver is gone"))]
     Receiver,
 }
@@ -83,9 +72,8 @@ impl CursorSource for Hyprland {
 }
 
 struct KWin {
-    connection: Connection,
     latest: Arc<Mutex<Option<Position>>>,
-    script: PathBuf,
+    _script: Script,
 }
 
 struct Receiver {
@@ -104,9 +92,7 @@ impl Receiver {
 impl KWin {
     fn open() -> Result<Self, CursorError> {
         let latest = Arc::new(Mutex::new(None));
-        let connection = Connection::session().map_err(Box::new).context(BusSnafu {
-            thing: "connecting to the session bus",
-        })?;
+        let connection = kwin::connect()?;
         connection
             .object_server()
             .at(
@@ -116,61 +102,21 @@ impl KWin {
                 },
             )
             .map_err(Box::new)
-            .context(BusSnafu {
-                thing: "serving the cursor receiver",
-            })?;
+            .context(ServeSnafu)?;
         let destination = connection
             .unique_name()
             .map(ToString::to_string)
             .ok_or(CursorError::Receiver)?;
-        let script = get_kwin_cursor_script()?;
-        fs::write(&script, sampler(&destination)).context(ScriptSnafu {
-            path: script.clone(),
-        })?;
-        let kwin = Self {
-            connection,
-            latest,
-            script,
-        };
-        kwin.unload()?;
-        let id: i32 = kwin.call(
-            KWIN_SCRIPTING_PATH,
-            KWIN_SCRIPTING,
-            "loadScript",
-            &(kwin.script.to_string_lossy().as_ref(), KWIN_PLUGIN),
+        let script = Script::load(
+            &connection,
+            KWIN_PLUGIN,
+            get_kwin_cursor_script()?,
+            &sampler(&destination),
         )?;
-        ensure!(id >= 0, LoadSnafu);
-        kwin.call::<_, ()>(&format!("/Scripting/Script{id}"), KWIN_SCRIPT, "run", &())?;
-        Ok(kwin)
-    }
-
-    fn call<B, R>(
-        &self,
-        path: &str,
-        interface: &str,
-        method: &str,
-        body: &B,
-    ) -> Result<R, CursorError>
-    where
-        B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType,
-        R: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
-    {
-        self.connection
-            .call_method(Some(KWIN_SERVICE), path, Some(interface), method, body)
-            .and_then(|reply| reply.body().deserialize())
-            .map_err(Box::new)
-            .context(BusSnafu {
-                thing: format!("calling {interface}.{method}"),
-            })
-    }
-
-    fn unload(&self) -> Result<bool, CursorError> {
-        self.call(
-            KWIN_SCRIPTING_PATH,
-            KWIN_SCRIPTING,
-            "unloadScript",
-            &(KWIN_PLUGIN,),
-        )
+        Ok(Self {
+            latest,
+            _script: script,
+        })
     }
 }
 
@@ -180,15 +126,6 @@ impl CursorSource for KWin {
             .lock()
             .map(|latest| *latest)
             .map_err(|_| CursorError::Receiver)
-    }
-}
-
-impl Drop for KWin {
-    fn drop(&mut self) {
-        if let Err(error) = self.unload() {
-            eprintln!("{}", snafu::Report::from_error(error));
-        }
-        let _ = fs::remove_file(&self.script);
     }
 }
 

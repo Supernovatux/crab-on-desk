@@ -22,7 +22,7 @@ use std::io::{self, Read, Write};
 
 use crab_common::{
     agent::{AgentEvent, MAX_MESSAGE_BYTES, PermissionDecision},
-    gui::PERMISSION_APP_ID,
+    gui::{PERMISSION_APP_ID, PERMISSION_MAX_HEIGHT},
 };
 use iced::{
     Element, Fill, Font, Length, Size, Task,
@@ -70,7 +70,6 @@ const UNCHECKED_MARK: &str = "\u{25a1}";
 
 const COMPACT_WIDTH: f32 = 328.0;
 const PLAN_WIDTH: f32 = 488.0;
-const MAX_HEIGHT: f32 = 608.0;
 const INITIAL_HEIGHT: f32 = 220.0;
 const CARD_PADDING: [u16; 2] = [16, 20];
 const CARD_GAP: u32 = 8;
@@ -122,6 +121,7 @@ enum Message {
     Next,
     Back,
     CardSized(Size),
+    WindowResized(Size),
 }
 
 struct Prompt {
@@ -161,6 +161,7 @@ pub fn run() -> Result<(), PermissionError> {
         Prompt::update,
         Prompt::view,
     )
+    .subscription(|_| window::resize_events().map(|(_, size)| Message::WindowResized(size)))
     .title(PERMISSION_TITLE)
     .theme(style::theme(appearance))
     .window(window_settings(initial))
@@ -206,6 +207,16 @@ fn platform_settings() -> window::settings::PlatformSpecific {
 #[cfg(not(target_os = "linux"))]
 fn platform_settings() -> window::settings::PlatformSpecific {
     window::settings::PlatformSpecific::default()
+}
+
+fn pin(size: Size) -> Task<Message> {
+    window::latest().and_then(move |id| {
+        window::set_max_size(id, None)
+            .chain(window::set_min_size(id, None))
+            .chain(window::resize(id, size))
+            .chain(window::set_min_size(id, Some(size)))
+            .chain(window::set_max_size(id, Some(size)))
+    })
 }
 
 fn decide(decision: &PermissionDecision) -> Task<Message> {
@@ -297,6 +308,14 @@ impl Prompt {
                 self.card_height = size.height;
                 self.fit()
             }
+            Message::WindowResized(size) => {
+                if (size.width - self.window.width).abs() < 1.0
+                    && (size.height - self.window.height).abs() < 1.0
+                {
+                    return Task::none();
+                }
+                pin(self.window)
+            }
         }
     }
 
@@ -347,19 +366,15 @@ impl Prompt {
     fn fit(&mut self) -> Task<Message> {
         let size = Size::new(
             width(&self.request.kind),
-            self.card_height.min(MAX_HEIGHT).ceil(),
+            self.card_height
+                .min(f32::from(PERMISSION_MAX_HEIGHT))
+                .ceil(),
         );
         if size == self.window {
             return Task::none();
         }
         self.window = size;
-        window::latest().and_then(move |id| {
-            window::set_max_size(id, None)
-                .chain(window::set_min_size(id, None))
-                .chain(window::resize(id, size))
-                .chain(window::set_min_size(id, Some(size)))
-                .chain(window::set_max_size(id, Some(size)))
-        })
+        pin(size)
     }
 
     fn view(&self) -> Element<'_, Message> {

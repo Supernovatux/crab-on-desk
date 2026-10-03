@@ -30,6 +30,7 @@ use crab_common::{
     agent::{Agent, AgentEvent, EventKind},
     atlas::Animations,
     claude::CLAUDE_PROCESS,
+    config::Config,
     control::{Control, Message},
     dirs::get_sibling_executable,
     gui::{DISPLAYS_PAGE, GUI_BINARY, SETTINGS_MODE},
@@ -45,6 +46,7 @@ use crate::{
     clicks::Clicks,
     cursor::{self, CursorSource, Position},
     permission::{self, Prompt},
+    placement::{self, Location, Placer},
     process,
     random::roll,
     spin::Spin,
@@ -92,6 +94,8 @@ struct Handler {
     roaming: bool,
     track_cursor: bool,
     cursor: Cursor,
+    location: Option<Location>,
+    placer: Option<Box<dyn Placer>>,
     running: bool,
     outcome: Outcome,
 }
@@ -102,7 +106,6 @@ struct Cursor {
     unavailable: bool,
     looking: bool,
     last: Option<Position>,
-    center: Option<(f64, f64)>,
     spin: Spin,
 }
 
@@ -110,7 +113,7 @@ pub fn run(
     window: WindowHandle,
     window_events: WindowEvents,
     state: StateMachine,
-    track_cursor: bool,
+    config: &Config,
 ) -> Result<Outcome, HandlerError> {
     let mut event_loop: EventLoop<Handler> = EventLoop::try_new().context(CalloopSnafu {
         thing: "creating event loop",
@@ -154,8 +157,8 @@ pub fn run(
                 let animation = handler.state.hover(inside, Instant::now());
                 handler.show(animation);
             }
-            channel::Event::Msg(WindowEvent::Moved { center }) => {
-                handler.cursor.center = Some(center);
+            channel::Event::Msg(WindowEvent::Moved(location)) => {
+                handler.location = Some(location);
             }
             channel::Event::Msg(WindowEvent::OpenSettings) => handler.open_settings(),
             channel::Event::Msg(WindowEvent::RoamEnded) => {
@@ -181,8 +184,10 @@ pub fn run(
         next_prompt: 0,
         settings: HashMap::new(),
         roaming: false,
-        track_cursor,
+        track_cursor: config.track_cursor,
         cursor: Cursor::default(),
+        location: None,
+        placer: config.position_window.then(open_placer).flatten(),
         running: true,
         outcome: Outcome::Closed,
     };
@@ -269,7 +274,21 @@ impl Handler {
         }
     }
 
+    fn place_prompt(&mut self) {
+        let (Some(placer), Some(location)) = (self.placer.as_mut(), self.location.as_ref()) else {
+            return;
+        };
+        if let Err(error) = placer.place(location) {
+            eprintln!(
+                "Prompt placement disabled: {}",
+                snafu::Report::from_error(error)
+            );
+            self.placer = None;
+        }
+    }
+
     fn open_prompt(&mut self, event: &AgentEvent, hook: UnixStream) {
+        self.place_prompt();
         let prompt = match Prompt::open(event, hook) {
             Ok(prompt) => prompt,
             Err(error) => {
@@ -507,7 +526,7 @@ impl Handler {
             self.show(animation);
             return;
         }
-        let Some((center_x, center_y)) = self.cursor.center else {
+        let Some((center_x, center_y)) = self.location.as_ref().map(Location::center) else {
             return;
         };
         let offset = (f64::from(x) - center_x, f64::from(y) - center_y);
@@ -544,4 +563,15 @@ impl Handler {
             }),
         }
     }
+}
+
+fn open_placer() -> Option<Box<dyn Placer>> {
+    placement::open()
+        .inspect_err(|error| {
+            eprintln!(
+                "Prompt placement disabled: {}",
+                snafu::Report::from_error(error)
+            );
+        })
+        .ok()
 }

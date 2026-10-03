@@ -43,8 +43,7 @@ const WINDOW_SIZE: Size = Size::new(800.0, 560.0);
 const MIN_WINDOW_SIZE: Size = Size::new(640.0, 480.0);
 const SAVED_OFFLINE: &str = "Saved. The widget is not running; it applies at the next start.";
 const SAVED: &str = "Saved. The widget is restarting.";
-const NO_HOOKS: &str =
-    "No agent hooks are installed, so nothing will drive the crab. Turn on Claude Code hooks, or press Finish anyway.";
+const NO_HOOKS: &str = "No agent hooks are installed, so nothing will drive the crab. Turn on Claude Code hooks, or press Finish anyway.";
 
 #[derive(Debug, Snafu)]
 pub enum SettingsError {
@@ -79,6 +78,7 @@ enum Message {
     Show(Page),
     FreeRoam(bool),
     TrackCursor(bool),
+    PositionWindow(bool),
     SelectTheme(String),
     Hooks(bool),
     Finish,
@@ -113,6 +113,7 @@ struct Settings {
     theme: Option<String>,
     free_roam: bool,
     track_cursor: bool,
+    position_window: bool,
     themes: Vec<ThemeEntry>,
     hooks: Hooks,
     hooks_warning: HooksWarning,
@@ -211,6 +212,7 @@ impl Settings {
             colors,
             free_roam: config.as_ref().is_some_and(|config| config.free_roam),
             track_cursor: config.as_ref().is_none_or(|config| config.track_cursor),
+            position_window: config.as_ref().is_none_or(|config| config.position_window),
             theme: config.map(|config| config.default_theme),
             themes: Vec::new(),
             hooks: Hooks::Missing,
@@ -258,6 +260,10 @@ impl Settings {
                 self.track_cursor = enabled;
                 self.save();
             }
+            Message::PositionWindow(enabled) => {
+                self.position_window = enabled;
+                self.save();
+            }
             Message::SelectTheme(theme) => {
                 self.theme = Some(theme);
                 self.save();
@@ -299,6 +305,7 @@ impl Settings {
             default_theme,
             free_roam: self.free_roam,
             track_cursor: self.track_cursor,
+            position_window: self.position_window,
         })
     }
 

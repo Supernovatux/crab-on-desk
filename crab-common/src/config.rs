@@ -45,9 +45,15 @@ pub struct Config {
     pub free_roam: bool,
     #[serde(default = "tracks_cursor_by_default")]
     pub track_cursor: bool,
+    #[serde(default = "positions_window_by_default")]
+    pub position_window: bool,
 }
 
 const fn tracks_cursor_by_default() -> bool {
+    true
+}
+
+const fn positions_window_by_default() -> bool {
     true
 }
 

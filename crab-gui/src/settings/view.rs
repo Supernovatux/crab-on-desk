@@ -195,6 +195,15 @@ impl Settings {
                         .style(move |theme, status| style::switch(colors, theme, status))
                         .into(),
                 ),
+                self.row(
+                    "Prompt next to crab",
+                    Some("Open permission prompts beside the crab (Hyprland, KDE)."),
+                    toggler(self.position_window)
+                        .size(SWITCH_SIZE)
+                        .on_toggle(Message::PositionWindow)
+                        .style(move |theme, status| style::switch(colors, theme, status))
+                        .into(),
+                ),
             ],
         )
     }

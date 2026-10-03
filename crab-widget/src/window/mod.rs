@@ -25,7 +25,7 @@ use calloop::channel::{self, Channel, Sender};
 use crab_common::atlas::Animations;
 use snafu::{ResultExt, Snafu, ensure};
 
-use crate::theme::Theme;
+use crate::{placement::Location, theme::Theme};
 
 mod wayland;
 
@@ -51,7 +51,7 @@ pub enum Side {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowEvent {
     Click { side: Side },
     UserIdle { since: Instant },
@@ -59,7 +59,7 @@ pub enum WindowEvent {
     Docked,
     Undocked,
     Hover { inside: bool },
-    Moved { center: (f64, f64) },
+    Moved(Location),
     RoamEnded,
     OpenSettings,
 }
