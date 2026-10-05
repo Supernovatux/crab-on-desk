@@ -31,6 +31,7 @@ use iced::{Size, Subscription, Task, window};
 use snafu::{ResultExt, Snafu};
 
 use crate::{
+    keyboard,
     outputs::{self, Output},
     theme,
 };
@@ -43,6 +44,8 @@ const WINDOW_SIZE: Size = Size::new(800.0, 560.0);
 const MIN_WINDOW_SIZE: Size = Size::new(640.0, 480.0);
 const SAVED_OFFLINE: &str = "Saved. The widget is not running; it applies at the next start.";
 const SAVED: &str = "Saved. The widget is restarting.";
+const QUIT: &str = "The crab has quit. Claude Code starts it again with the next session.";
+const NOT_RUNNING: &str = "The widget is not running.";
 const NO_HOOKS: &str = "No agent hooks are installed, so nothing will drive the crab. Turn on Claude Code hooks, or press Finish anyway.";
 
 #[derive(Debug, Snafu)]
@@ -85,6 +88,8 @@ enum Message {
     MoveTo(String),
     DismissToast,
     Mapped,
+    QuitWidget,
+    Close,
 }
 
 #[derive(Debug, Clone)]
@@ -228,10 +233,11 @@ impl Settings {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        match self.size {
+        let mapped = match self.size {
             Pin::Fixed => window::frames().map(|_| Message::Mapped),
             Pin::Free => Subscription::none(),
-        }
+        };
+        Subscription::batch([mapped, keyboard::escape().map(|()| Message::Close)])
     }
 
     fn unpin(&mut self) -> Task<Message> {
@@ -290,12 +296,20 @@ impl Settings {
                     output: output.clone(),
                 })) {
                     Ok(true) => self.say(format!("Moved the crab to {output}.")),
-                    Ok(false) => self.fail("The widget is not running.".to_owned()),
+                    Ok(false) => self.fail(NOT_RUNNING.to_owned()),
                     Err(error) => self.fail(error),
                 }
             }
             Message::DismissToast => self.toast = None,
             Message::Mapped => return self.unpin(),
+            Message::QuitWidget => {
+                match notify_widget(&WidgetMessage::Control(Control::Quit)) {
+                    Ok(true) => self.say(QUIT),
+                    Ok(false) => self.fail(NOT_RUNNING.to_owned()),
+                    Err(error) => self.fail(error),
+                }
+            }
+            Message::Close => return iced::exit(),
         }
         Task::none()
     }

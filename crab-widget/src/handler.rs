@@ -126,6 +126,7 @@ pub fn run(
                 handler.outcome = Outcome::Restart;
                 handler.running = false;
             }
+            Message::Control(Control::Quit) => handler.running = false,
             Message::Control(Control::MoveToOutput { output }) => {
                 if handler.window.move_to_output(output).is_err() {
                     handler.running = false;

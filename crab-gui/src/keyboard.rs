@@ -14,21 +14,17 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use serde::{Deserialize, Serialize};
+use iced::{
+    Subscription,
+    keyboard::{self, Event, Key, key::Named},
+};
 
-use crate::agent::AgentEvent;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "command", rename_all = "kebab-case")]
-pub enum Control {
-    MoveToOutput { output: String },
-    Reload,
-    Quit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Message {
-    Agent(AgentEvent),
-    Control(Control),
+pub fn escape() -> Subscription<()> {
+    keyboard::listen().filter_map(|event| match event {
+        Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            ..
+        } => Some(()),
+        _ => None,
+    })
 }

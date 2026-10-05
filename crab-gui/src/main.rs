@@ -27,6 +27,7 @@ use settings::Page;
 use snafu::Snafu;
 
 mod desktop;
+mod keyboard;
 mod outputs;
 mod permission;
 mod settings;

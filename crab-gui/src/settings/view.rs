@@ -89,9 +89,13 @@ impl Settings {
     pub(super) fn view(&self) -> Element<'_, Message> {
         let (title, subtitle, body) = match (self.mode, self.page) {
             (Mode::Setup, _) => (SETUP_TITLE, SETUP_SUBTITLE, self.setup()),
-            (Mode::Settings, Page::General) => {
-                (self.page.label(), self.page.subtitle(), self.general())
-            }
+            (Mode::Settings, Page::General) => (
+                self.page.label(),
+                self.page.subtitle(),
+                column![self.general(), self.widget()]
+                    .spacing(SECTION_GAP)
+                    .into(),
+            ),
             (Mode::Settings, Page::Theme) => {
                 (self.page.label(), self.page.subtitle(), self.themes())
             }
@@ -205,6 +209,18 @@ impl Settings {
                         .into(),
                 ),
             ],
+        )
+    }
+
+    fn widget(&self) -> Element<'_, Message> {
+        section(
+            self,
+            "Widget",
+            vec![self.row(
+                "Quit crab",
+                Some("Close the widget. Claude Code starts it again with the next session."),
+                self.soft("Quit", Tone::Plain, Some(Message::QuitWidget)),
+            )],
         )
     }
 

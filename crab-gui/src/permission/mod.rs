@@ -25,7 +25,7 @@ use crab_common::{
     gui::{PERMISSION_APP_ID, PERMISSION_MAX_HEIGHT},
 };
 use iced::{
-    Element, Fill, Font, Length, Size, Task,
+    Element, Fill, Font, Length, Size, Subscription, Task,
     alignment::Horizontal,
     widget::{
         Column, button, column, container, operation, row, scrollable,
@@ -38,6 +38,7 @@ use snafu::{ResultExt, Snafu};
 
 use crate::{
     desktop::{self, Desktop},
+    keyboard,
     theme::{self, BOLD, MEDIUM, SEMIBOLD},
 };
 use request::{Answer, Kind, Question, Request};
@@ -122,6 +123,7 @@ enum Message {
     Back,
     CardSized(Size),
     WindowResized(Size),
+    Close,
 }
 
 struct Prompt {
@@ -161,7 +163,12 @@ pub fn run() -> Result<(), PermissionError> {
         Prompt::update,
         Prompt::view,
     )
-    .subscription(|_| window::resize_events().map(|(_, size)| Message::WindowResized(size)))
+    .subscription(|_| {
+        Subscription::batch([
+            window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+            keyboard::escape().map(|()| Message::Close),
+        ])
+    })
     .title(PERMISSION_TITLE)
     .theme(style::theme(appearance))
     .window(window_settings(initial))
@@ -258,6 +265,7 @@ impl Prompt {
                     decide(&self.request.accept(suggestion))
                 }),
             Message::GoToTerminal => self.go_to_terminal(),
+            Message::Close => iced::exit(),
             Message::OpenFeedback => {
                 self.feedback = Some(String::new());
                 operation::focus(TEXT_INPUT_ID)
