@@ -25,7 +25,7 @@ use calloop::RegistrationToken;
 use crab_common::{
     agent::{Agent, AgentEvent, EventKind, MAX_MESSAGE_BYTES, PermissionDecision},
     dirs::{CommonError, get_sibling_executable},
-    gui::{GUI_BINARY, PERMISSION_MODE},
+    gui::{GUI_BINARY, PERMISSION_MODE, PromptSpot},
 };
 use rustix::{io::Errno, net::sockopt::socket_peercred, process::Pid};
 use snafu::{OptionExt, ResultExt, Snafu};
@@ -75,10 +75,15 @@ pub const fn settles(kind: &EventKind) -> bool {
 }
 
 impl Prompt {
-    pub fn open(event: &AgentEvent, hook: UnixStream) -> Result<Self, PermissionError> {
+    pub fn open(
+        event: &AgentEvent,
+        hook: UnixStream,
+        spot: Option<PromptSpot>,
+    ) -> Result<Self, PermissionError> {
         let request = serde_json::to_vec(event).context(EncodeSnafu)?;
         let child = Command::new(get_sibling_executable(GUI_BINARY)?)
             .arg(PERMISSION_MODE)
+            .args(spot.iter().flat_map(PromptSpot::args))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

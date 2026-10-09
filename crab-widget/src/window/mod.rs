@@ -22,17 +22,50 @@ use std::{
 };
 
 use calloop::channel::{self, Channel, Sender};
-use crab_common::atlas::Animations;
+use crab_common::{
+    atlas::Animations,
+    desktop::{self, Session},
+};
 use snafu::{ResultExt, Snafu, ensure};
 
-use crate::{placement::Location, theme::Theme};
+use crate::{
+    placement::Location,
+    renderer::RendererError,
+    theme::{Theme, ThemeError},
+};
 
+#[cfg(feature = "wayland")]
 mod wayland;
+mod widget;
+#[cfg(feature = "x11")]
+mod x11;
+
+pub const NAMESPACE: &str = "carb-on-desk";
+pub const SIZE: u32 = 200;
 
 #[derive(Debug, Snafu)]
 pub enum WindowError {
+    #[cfg(feature = "wayland")]
     #[snafu(context(false))]
     Wayland { source: wayland::WaylandError },
+    #[cfg(feature = "x11")]
+    #[snafu(context(false))]
+    X11 {
+        source: crate::backend::x11::X11Error,
+    },
+    #[snafu(display("No window backend for this session"))]
+    Unsupported,
+    #[snafu(display("Renderer error"))]
+    #[snafu(context(false))]
+    Renderer { source: RendererError },
+    #[snafu(display("Theme error"))]
+    #[snafu(context(false))]
+    Theme { source: ThemeError },
+    #[snafu(display("Calloop Error at {thing}"))]
+    Calloop {
+        source: calloop::Error,
+        thing: String,
+    },
     #[snafu(display("Unable to spawn window thread"))]
     Spawn { source: io::Error },
     #[snafu(display("Window thread exited before setup finished"))]
@@ -73,9 +106,6 @@ pub enum WindowCommand {
 }
 
 trait Window {
-    fn new(theme: Arc<Theme>, events: Sender<WindowEvent>) -> Result<Box<Self>, WindowError>
-    where
-        Self: Sized;
     fn run(
         self: Box<Self>,
         animation: Animations,
@@ -156,11 +186,13 @@ fn join(thread: JoinHandle<Result<(), WindowError>>) -> Result<(), WindowError> 
 }
 
 fn create(theme: Arc<Theme>, events: Sender<WindowEvent>) -> Result<Box<dyn Window>, WindowError> {
-    #[cfg(target_os = "linux")]
-    {
-        use crate::{renderer::opengl::Opengl, window::wayland::WaylandWindow};
+    use crate::renderer::opengl::Opengl;
 
-        let window = WaylandWindow::<Opengl>::new(theme, events)?;
-        Ok(window)
+    match desktop::detect() {
+        #[cfg(feature = "wayland")]
+        Some(Session::Wayland(_)) => wayland::open::<Opengl>(theme, events),
+        #[cfg(feature = "x11")]
+        Some(Session::X11) => x11::open::<Opengl>(theme, events),
+        _ => UnsupportedSnafu.fail(),
     }
 }

@@ -14,40 +14,29 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::{Arc, Mutex};
-
-use crab_common::{
-    desktop::{self, Compositor},
-    dirs::{CommonError, get_kwin_cursor_script},
-};
-use hyprland::{data::CursorPosition, error::HyprError, shared::HyprData};
-use snafu::{ResultExt, Snafu};
-use zbus::interface;
-
-use crate::kwin::{self, KWinError, Script};
-
-const KWIN_PLUGIN: &str = "crab-on-desk-cursor";
-const RECEIVER_PATH: &str = "/com/supernovatux/CrabOnDesk/Cursor";
-const RECEIVER_INTERFACE: &str = "com.supernovatux.CrabOnDesk.Cursor";
-const RECEIVER_METHOD: &str = "Moved";
-const SAMPLE_INTERVAL_MS: u32 = 100;
+use crab_common::desktop;
+use snafu::Snafu;
 
 pub type Position = (i32, i32);
 
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum CursorError {
     #[snafu(display("No cursor source for this desktop"))]
     Unsupported,
+    #[cfg(feature = "hyprland")]
     #[snafu(display("Hyprland did not report the cursor"))]
-    Hyprland { source: HyprError },
+    Hyprland { source: hyprland::error::HyprError },
+    #[cfg(feature = "kde")]
     #[snafu(context(false))]
-    Dir { source: CommonError },
+    KWin {
+        source: crate::backend::kwin::KWinError,
+    },
+    #[cfg(feature = "x11")]
     #[snafu(context(false))]
-    KWin { source: KWinError },
-    #[snafu(display("Unable to serve the cursor receiver"))]
-    Serve { source: Box<zbus::Error> },
-    #[snafu(display("The KWin cursor receiver is gone"))]
-    Receiver,
+    X11 {
+        source: crate::backend::x11::X11Error,
+    },
 }
 
 pub trait CursorSource {
@@ -56,93 +45,16 @@ pub trait CursorSource {
 
 pub fn open() -> Result<Box<dyn CursorSource>, CursorError> {
     match desktop::detect() {
-        Some(Compositor::Hyprland) => Ok(Box::new(Hyprland)),
-        Some(Compositor::KWin) => Ok(Box::new(KWin::open()?)),
-        None => UnsupportedSnafu.fail(),
-    }
-}
-
-struct Hyprland;
-
-impl CursorSource for Hyprland {
-    fn position(&mut self) -> Result<Option<Position>, CursorError> {
-        let position = CursorPosition::get().context(HyprlandSnafu)?;
-        Ok(Some((position.x as i32, position.y as i32)))
-    }
-}
-
-struct KWin {
-    latest: Arc<Mutex<Option<Position>>>,
-    _script: Script,
-}
-
-struct Receiver {
-    latest: Arc<Mutex<Option<Position>>>,
-}
-
-#[interface(name = "com.supernovatux.CrabOnDesk.Cursor")]
-impl Receiver {
-    fn moved(&self, x: i32, y: i32) {
-        if let Ok(mut latest) = self.latest.lock() {
-            *latest = Some((x, y));
+        #[cfg(feature = "hyprland")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::Hyprland))) => {
+            Ok(Box::new(crate::backend::hyprland::Cursor))
         }
+        #[cfg(feature = "kde")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::KWin))) => {
+            Ok(Box::new(crate::backend::kwin::Cursor::open()?))
+        }
+        #[cfg(feature = "x11")]
+        Some(desktop::Session::X11) => Ok(Box::new(crate::backend::x11::Cursor::open()?)),
+        _ => UnsupportedSnafu.fail(),
     }
-}
-
-impl KWin {
-    fn open() -> Result<Self, CursorError> {
-        let latest = Arc::new(Mutex::new(None));
-        let connection = kwin::connect()?;
-        connection
-            .object_server()
-            .at(
-                RECEIVER_PATH,
-                Receiver {
-                    latest: Arc::clone(&latest),
-                },
-            )
-            .map_err(Box::new)
-            .context(ServeSnafu)?;
-        let destination = connection
-            .unique_name()
-            .map(ToString::to_string)
-            .ok_or(CursorError::Receiver)?;
-        let script = Script::load(
-            &connection,
-            KWIN_PLUGIN,
-            get_kwin_cursor_script()?,
-            &sampler(&destination),
-        )?;
-        Ok(Self {
-            latest,
-            _script: script,
-        })
-    }
-}
-
-impl CursorSource for KWin {
-    fn position(&mut self) -> Result<Option<Position>, CursorError> {
-        self.latest
-            .lock()
-            .map(|latest| *latest)
-            .map_err(|_| CursorError::Receiver)
-    }
-}
-
-fn sampler(destination: &str) -> String {
-    format!(
-        r#"const timer = new QTimer();
-timer.interval = {SAMPLE_INTERVAL_MS};
-let last = null;
-function sample() {{
-  const position = workspace.cursorPos;
-  if (last && last.x === position.x && last.y === position.y) return;
-  last = {{ x: position.x, y: position.y }};
-  callDBus("{destination}", "{RECEIVER_PATH}", "{RECEIVER_INTERFACE}", "{RECEIVER_METHOD}", position.x, position.y);
-}}
-timer.timeout.connect(sample);
-timer.start();
-sample();
-"#
-    )
 }

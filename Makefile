@@ -1,5 +1,7 @@
 CARGO ?= cargo
 CARGO_FLAGS ?= --locked
+FEATURES ?=
+FEATURE_FLAGS := $(if $(FEATURES),--no-default-features --features "$(FEATURES)")
 RELEASE := target/release
 BINS := crab-widget crab-hook crab-gui crab-codex
 
@@ -26,7 +28,7 @@ HEADLESS := --ozone-platform=headless --ozone-override-screen-size=1024,1024
 all: build
 
 build:
-	$(CARGO) build --release $(CARGO_FLAGS) $(addprefix -p ,$(BINS))
+	$(CARGO) build --release $(CARGO_FLAGS) $(FEATURE_FLAGS) $(addprefix -p ,$(BINS))
 
 install: build
 	install -Dm755 -t "$(DESTDIR)$(BINDIR)" $(addprefix $(RELEASE)/,$(BINS))

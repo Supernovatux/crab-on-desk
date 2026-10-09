@@ -33,7 +33,7 @@ use crab_common::{
     config::Config,
     control::{Control, Message},
     dirs::get_sibling_executable,
-    gui::{DISPLAYS_PAGE, GUI_BINARY, SETTINGS_MODE},
+    gui::{DISPLAYS_PAGE, GUI_BINARY, PromptSpot, SETTINGS_MODE},
 };
 use rustix::{
     io::Errno,
@@ -275,22 +275,26 @@ impl Handler {
         }
     }
 
-    fn place_prompt(&mut self) {
+    fn place_prompt(&mut self) -> Option<PromptSpot> {
         let (Some(placer), Some(location)) = (self.placer.as_mut(), self.location.as_ref()) else {
-            return;
+            return None;
         };
-        if let Err(error) = placer.place(location) {
-            eprintln!(
-                "Prompt placement disabled: {}",
-                snafu::Report::from_error(error)
-            );
-            self.placer = None;
-        }
+        placer
+            .place(location)
+            .inspect_err(|error| {
+                eprintln!(
+                    "Prompt placement disabled: {}",
+                    snafu::Report::from_error(error)
+                );
+            })
+            .map_err(|_| self.placer = None)
+            .ok()
+            .flatten()
     }
 
     fn open_prompt(&mut self, event: &AgentEvent, hook: UnixStream) {
-        self.place_prompt();
-        let prompt = match Prompt::open(event, hook) {
+        let spot = self.place_prompt();
+        let prompt = match Prompt::open(event, hook, spot) {
             Ok(prompt) => prompt,
             Err(error) => {
                 eprintln!("{}", snafu::Report::from_error(error));

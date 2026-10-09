@@ -5,21 +5,35 @@ edition = "2024"
 
 [dependencies]
 calloop = "0.14.4"
-calloop-wayland-source = "0.4.1"
+calloop-wayland-source = { version = "0.4.1", optional = true }
 crab-common = { version = "0.1.0", path = "../crab-common" }
 gl = "0.14.0"
-glutin = { version = "0.32.3", default-features = false, features = ["egl", "wayland"] }
-hyprland = { version = "0.4.0-beta.3", default-features = false, features = ["data"] }
+glutin = { version = "0.32.3", default-features = false, features = ["egl"] }
+hyprland = { version = "0.4.0-beta.3", default-features = false, features = ["data"], optional = true }
 ktx2 = "0.5.0"
 memmap2 = "0.9.11"
 raw-window-handle = "0.6.2"
 rustix = { version = "1.1.5", features = ["net", "process"] }
 serde_json = "1.0.151"
-smithay-client-toolkit = "0.21.1"
+smithay-client-toolkit = { version = "0.21.1", optional = true, default-features = false }
 snafu.workspace = true
-wayland-client = "0.31.15"
-wayland-egl = "0.32.11"
-zbus = "5.19.0"
+wayland-client = { version = "0.31.15", optional = true }
+wayland-egl = { version = "0.32.11", optional = true }
+x11rb = { version = "0.13.2", default-features = false, features = ["dl-libxcb", "randr", "shape", "sync", "cursor", "resource_manager"], optional = true }
+zbus = { version = "5.19.0", optional = true }
 
 [lints]
 workspace = true
+
+[features]
+default = ["hyprland", "kde", "x11"]
+wayland = [
+    "dep:calloop-wayland-source",
+    "dep:smithay-client-toolkit",
+    "dep:wayland-client",
+    "dep:wayland-egl",
+    "glutin/wayland",
+]
+hyprland = ["wayland", "dep:hyprland"]
+kde = ["wayland", "dep:zbus"]
+x11 = ["dep:x11rb", "crab-common/x11"]

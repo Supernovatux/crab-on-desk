@@ -14,48 +14,44 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{
-    io::{self, Read, Write},
-    os::unix::net::UnixStream,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
-
 use crab_common::{
-    desktop::{self, Compositor},
-    dirs::{CommonError, get_hyprland_socket, get_kwin_placement_script},
-    gui::{PERMISSION_APP_ID, PERMISSION_MAX_HEIGHT},
+    desktop,
+    gui::{PERMISSION_MAX_HEIGHT, PromptSpot},
 };
-use snafu::{OptionExt, ResultExt, Snafu, ensure};
-use zbus::interface;
-
-use crate::kwin::{self, KWinError, Script};
+use snafu::Snafu;
 
 const GAP: i32 = 8;
 const MARGIN: i32 = 8;
-const HYPRLAND_RULE: &str = "crab-on-desk-permission";
-const KWIN_PLUGIN: &str = "crab-on-desk-placement";
-const SPOT_PATH: &str = "/com/supernovatux/CrabOnDesk/Placement";
-const SPOT_INTERFACE: &str = "com.supernovatux.CrabOnDesk.Placement";
 
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum PlacementError {
     #[snafu(display("No window placement for this desktop"))]
     Unsupported,
-    #[snafu(context(false))]
-    Dir { source: CommonError },
+    #[cfg(feature = "hyprland")]
     #[snafu(display("Unable to talk to Hyprland at {path:?}"))]
-    Socket { source: io::Error, path: PathBuf },
+    Socket {
+        source: std::io::Error,
+        path: std::path::PathBuf,
+    },
+    #[cfg(feature = "hyprland")]
     #[snafu(display("Hyprland rejected the window rule: {reply}"))]
     Rejected { reply: String },
+    #[cfg(feature = "hyprland")]
     #[snafu(context(false))]
-    KWin { source: KWinError },
-    #[snafu(display("Unable to serve the placement spot"))]
-    Serve { source: Box<zbus::Error> },
-    #[snafu(display("The session bus gave no name"))]
-    Unnamed,
-    #[snafu(display("The placement spot lock is poisoned"))]
-    Poisoned,
+    Dir {
+        source: crab_common::dirs::CommonError,
+    },
+    #[cfg(feature = "kde")]
+    #[snafu(context(false))]
+    KWin {
+        source: crate::backend::kwin::KWinError,
+    },
+    #[cfg(feature = "x11")]
+    #[snafu(context(false))]
+    X11 {
+        source: crate::backend::x11::X11Error,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,19 +80,20 @@ impl Location {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Side {
+pub enum Side {
     Left,
     Right,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Spot {
-    side: Side,
-    edge: i32,
-    middle: i32,
+pub struct Spot {
+    pub side: Side,
+    pub edge: i32,
+    pub middle: i32,
 }
 
-fn spot_of(location: &Location) -> Spot {
+#[must_use]
+pub fn spot_of(location: &Location) -> Spot {
     let Location { output, crab, .. } = location;
     let (crab_x, crab_y) = (crab.x - output.x, crab.y - output.y);
     let (side, edge) = if 2 * crab_x + crab.width > output.width {
@@ -114,178 +111,42 @@ fn spot_of(location: &Location) -> Spot {
     }
 }
 
+#[must_use]
+pub fn global_spot(location: &Location) -> PromptSpot {
+    let Spot { side, edge, middle } = spot_of(location);
+    PromptSpot {
+        left: side == Side::Left,
+        edge: location.output.x + edge,
+        middle: location.output.y + middle,
+    }
+}
+
 pub trait Placer {
-    fn place(&mut self, location: &Location) -> Result<(), PlacementError>;
+    fn place(&mut self, location: &Location) -> Result<Option<PromptSpot>, PlacementError>;
 }
 
 pub fn open() -> Result<Box<dyn Placer>, PlacementError> {
     match desktop::detect() {
-        Some(Compositor::Hyprland) => Ok(Box::new(Hyprland {
-            socket: get_hyprland_socket()?,
-        })),
-        Some(Compositor::KWin) => Ok(Box::new(KWin::open()?)),
-        None => UnsupportedSnafu.fail(),
-    }
-}
-
-struct Hyprland {
-    socket: PathBuf,
-}
-
-impl Hyprland {
-    fn eval(&self, code: &str) -> Result<(), PlacementError> {
-        let context = || SocketSnafu {
-            path: self.socket.clone(),
-        };
-        let mut stream = UnixStream::connect(&self.socket).with_context(|_| context())?;
-        stream
-            .write_all(format!("/eval {code}").as_bytes())
-            .with_context(|_| context())?;
-        let mut reply = String::new();
-        stream
-            .read_to_string(&mut reply)
-            .with_context(|_| context())?;
-        ensure!(reply.trim() == "ok", RejectedSnafu { reply });
-        Ok(())
-    }
-}
-
-fn hyprland_rule(spot: Option<(Spot, Option<&str>)>) -> String {
-    let class = format!("^{}$", PERMISSION_APP_ID.replace('.', "\\."));
-    let effects = spot.map_or_else(
-        || "enabled = false".to_owned(),
-        |(Spot { side, edge, middle }, output_name)| {
-            let x = match side {
-                Side::Left => format!("{edge}-window_w"),
-                Side::Right => edge.to_string(),
-            };
-            let monitor =
-                output_name.map_or_else(String::new, |name| format!("monitor = {name:?}, "));
-            format!("{monitor}move = \"{x} {middle}-window_h/2\"")
-        },
-    );
-    format!(
-        "hl.window_rule({{ name = {HYPRLAND_RULE:?}, match = {{ class = {class:?} }}, {effects} }})"
-    )
-}
-
-impl Placer for Hyprland {
-    fn place(&mut self, location: &Location) -> Result<(), PlacementError> {
-        self.eval(&hyprland_rule(Some((
-            spot_of(location),
-            location.output_name.as_deref(),
-        ))))
-    }
-}
-
-impl Drop for Hyprland {
-    fn drop(&mut self) {
-        if let Err(error) = self.eval(&hyprland_rule(None)) {
-            eprintln!("{}", snafu::Report::from_error(error));
+        #[cfg(feature = "hyprland")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::Hyprland))) => {
+            Ok(Box::new(crate::backend::hyprland::Placer::open()?))
         }
-    }
-}
-
-type KWinSpot = (bool, i32, i32);
-
-struct KWin {
-    spot: Arc<Mutex<Option<KWinSpot>>>,
-    _script: Script,
-}
-
-struct SpotServer {
-    spot: Arc<Mutex<Option<KWinSpot>>>,
-}
-
-#[interface(name = "com.supernovatux.CrabOnDesk.Placement")]
-impl SpotServer {
-    #[zbus(out_args("left", "edge", "middle"))]
-    fn spot(&self) -> zbus::fdo::Result<KWinSpot> {
-        self.spot
-            .lock()
-            .ok()
-            .and_then(|spot| *spot)
-            .ok_or_else(|| zbus::fdo::Error::Failed("The crab has no position yet".to_owned()))
-    }
-}
-
-impl KWin {
-    fn open() -> Result<Self, PlacementError> {
-        let spot = Arc::new(Mutex::new(None));
-        let connection = kwin::connect()?;
-        connection
-            .object_server()
-            .at(
-                SPOT_PATH,
-                SpotServer {
-                    spot: Arc::clone(&spot),
-                },
-            )
-            .map_err(Box::new)
-            .context(ServeSnafu)?;
-        let destination = connection
-            .unique_name()
-            .map(ToString::to_string)
-            .context(UnnamedSnafu)?;
-        let script = Script::load(
-            &connection,
-            KWIN_PLUGIN,
-            get_kwin_placement_script()?,
-            &kwin_script(&destination),
-        )?;
-        Ok(Self {
-            spot,
-            _script: script,
-        })
-    }
-}
-
-fn kwin_spot(spot: Spot, output: Area) -> KWinSpot {
-    let Spot { side, edge, middle } = spot;
-    (side == Side::Left, output.x + edge, output.y + middle)
-}
-
-fn kwin_script(destination: &str) -> String {
-    format!(
-        "function movePrompt(window, left, edge, middle) {{
-  const current = window.frameGeometry;
-  const x = left ? edge - current.width : edge;
-  window.frameGeometry = {{ x: x, y: middle - current.height / 2, width: current.width, height: current.height }};
-}}
-function keepCentred(window) {{
-  let height = window.frameGeometry.height;
-  window.frameGeometryChanged.connect(() => {{
-    const current = window.frameGeometry;
-    if (Math.abs(current.height - height) < 1) return;
-    const middle = current.y + height / 2;
-    height = current.height;
-    window.frameGeometry = {{ x: current.x, y: middle - current.height / 2, width: current.width, height: current.height }};
-  }});
-}}
-workspace.windowAdded.connect((window) => {{
-  if (window.resourceClass !== {PERMISSION_APP_ID:?}) return;
-  callDBus({destination:?}, {SPOT_PATH:?}, {SPOT_INTERFACE:?}, \"Spot\", (left, edge, middle) => {{
-    movePrompt(window, left, edge, middle);
-    keepCentred(window);
-  }});
-}});
-"
-    )
-}
-
-impl Placer for KWin {
-    fn place(&mut self, location: &Location) -> Result<(), PlacementError> {
-        let spot = kwin_spot(spot_of(location), location.output);
-        *self.spot.lock().map_err(|_| PlacementError::Poisoned)? = Some(spot);
-        Ok(())
+        #[cfg(feature = "kde")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::KWin))) => {
+            Ok(Box::new(crate::backend::kwin::Placer::open()?))
+        }
+        #[cfg(feature = "x11")]
+        Some(desktop::Session::X11) => Ok(Box::new(crate::backend::x11::Placer::open()?)),
+        _ => UnsupportedSnafu.fail(),
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
-    fn location(crab_x: i32, crab_y: i32) -> Location {
+    #[must_use]
+    pub fn location(crab_x: i32, crab_y: i32) -> Location {
         Location {
             output_name: Some("eDP-2".to_owned()),
             output: Area {
@@ -334,18 +195,14 @@ mod tests {
     }
 
     #[test]
-    fn hyprland_rule_targets_the_crab_output() {
+    fn global_spot_uses_global_coordinates() {
         assert_eq!(
-            hyprland_rule(Some((spot_of(&location(1720, 440)), Some("eDP-2")))),
-            r#"hl.window_rule({ name = "crab-on-desk-permission", match = { class = "^com\\.supernovatux\\.CrabOnDesk\\.Permission$" }, monitor = "eDP-2", move = "1712-window_w 540-window_h/2" })"#
-        );
-    }
-
-    #[test]
-    fn kwin_spot_uses_global_coordinates() {
-        assert_eq!(
-            kwin_spot(spot_of(&location(1720, 440)), location(0, 0).output),
-            (true, 4272, 900)
+            global_spot(&location(1720, 440)),
+            PromptSpot {
+                left: true,
+                edge: 4272,
+                middle: 900,
+            }
         );
     }
 }

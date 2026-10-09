@@ -16,6 +16,8 @@
 
 use std::env;
 
+pub const WAYLAND_DISPLAY: &str = "WAYLAND_DISPLAY";
+pub const X11_DISPLAY: &str = "DISPLAY";
 pub const HYPRLAND_INSTANCE: &str = "HYPRLAND_INSTANCE_SIGNATURE";
 pub const CURRENT_DESKTOP: &str = "XDG_CURRENT_DESKTOP";
 pub const KDE_DESKTOP: &str = "KDE";
@@ -25,13 +27,26 @@ pub const HYPRLAND_RUNTIME_DIR: &str = "hypr";
 pub const HYPRLAND_SOCKET: &str = ".socket.sock";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Session {
+    Wayland(Option<Compositor>),
+    X11,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compositor {
     Hyprland,
     KWin,
 }
 
 #[must_use]
-pub fn detect() -> Option<Compositor> {
+pub fn detect() -> Option<Session> {
+    if env::var_os(WAYLAND_DISPLAY).is_some() {
+        return Some(Session::Wayland(compositor()));
+    }
+    env::var_os(X11_DISPLAY).is_some().then_some(Session::X11)
+}
+
+fn compositor() -> Option<Compositor> {
     if env::var_os(HYPRLAND_INSTANCE).is_some() {
         return Some(Compositor::Hyprland);
     }

@@ -10,6 +10,10 @@ serde.workspace = true
 serde_plain.workspace = true
 toml.workspace = true
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
+x11rb = { version = "0.13.2", features = ["randr"], optional = true }
 
 [lints]
 workspace = true
+
+[features]
+x11 = ["dep:x11rb"]

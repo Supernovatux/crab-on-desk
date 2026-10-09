@@ -14,17 +14,16 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-pub mod agent;
-pub mod atlas;
-pub mod claude;
-pub mod config;
-pub mod control;
-pub mod desktop;
-pub mod dirs;
-pub mod gui;
-pub mod hooks;
-pub mod ipc;
-pub mod process;
-pub mod toml_file;
-#[cfg(feature = "x11")]
-pub mod x11;
+use hyprland::dispatch::{Dispatch, DispatchType, WindowIdentifier};
+use snafu::ResultExt;
+
+use crate::desktop::{Desktop, DesktopError, HyprlandSnafu};
+
+pub struct Hyprland;
+
+impl Desktop for Hyprland {
+    fn focus(&self, pid: u32) -> Result<(), DesktopError> {
+        Dispatch::call(DispatchType::FocusWindow(WindowIdentifier::ProcessId(pid)))
+            .context(HyprlandSnafu { pid })
+    }
+}

@@ -9,12 +9,12 @@ This project is a Linux-focused Rust clone of [rullerzhou-afk/clawd-on-desk](htt
 
 ## Features
 1. GPU-accelerated rendering.
-2. Wayland support.
+2. Wayland and X11 support.
 3. Supports multiple displays.
 4. Reacts to Claude Code sessions (thinking, working, subagents, errors, notifications).
 5. Permission prompts next to the pet: allow/deny tools, review plans, answer questions.
 6. Drag, click reactions, docking at the screen edge, free roam, sleeping when you are away.
-7. Eyes that follow the cursor (Hyprland and KDE Plasma).
+7. Eyes that follow the cursor (Hyprland, KDE Plasma and X11).
 
 ### Rendering backend~~s~~
 1. OpenGL
@@ -24,8 +24,8 @@ Vulkan will be added in the future.
 ### Tested desktop environments
 1. Hyprland (note: background blur needs to be disabled manually.)
 2. KDE Plasma (Wayland)
-
-Other OSes and X11 could be supported fairly easily by implementing the needed interfaces. Feel free to open a PR.
+3. X11 with any EWMH window manager. Transparency needs a compositing manager.
+GNOME support is planned. Other OSes could be supported by implementing the needed interfaces. Feel free to open a PR.
 
 ### Supported agent~~s~~
 - Claude Code
@@ -45,7 +45,7 @@ Then start `crab-widget` (see below).
 
 ### From source
 Requirements:
-- A Wayland compositor that supports `wlr-layer-shell` (for example Hyprland or KDE Plasma).
+- A Wayland compositor that supports `wlr-layer-shell` (for example Hyprland or KDE Plasma), or an X11 session.
 - OpenGL 4.2 or newer (the textures are BC7 compressed).
 - To build: `git`, a Rust toolchain (`cargo`), `cmake`, `clang`, and network access on the first build (a build script downloads KTX-Software).
 - Only for the themes of the original project: Electron (any `electron` or `electronNN` package).
@@ -58,6 +58,11 @@ make install
 make themes-install # for source themes
 ```
 Make sure `~/.local/bin` is on your `PATH`.
+
+All desktops are built by default. To build only some, pass a subset of `hyprland`, `kde` and `x11`:
+```sh
+make install FEATURES="hyprland x11"
+```
 
 Install at least one theme (see [Themes](#themes)), then start the widget:
 ```sh

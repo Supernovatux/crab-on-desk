@@ -14,11 +14,14 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#[cfg(not(any(feature = "wayland", feature = "x11")))]
+compile_error!("enable at least one desktop feature: hyprland, kde or x11");
+
 pub mod agent;
+pub mod backend;
 pub mod clicks;
 pub mod cursor;
 pub mod handler;
-pub mod kwin;
 pub mod permission;
 pub mod placement;
 pub mod process;

@@ -101,7 +101,11 @@ impl Renderer for Opengl {
                 },
             )?
         };
-        let config = unsafe { gl_display.find_configs(ConfigTemplateBuilder::new().build()) }
+        let template = ConfigTemplateBuilder::new()
+            .with_transparency(true)
+            .compatible_with_native_window(window)
+            .build();
+        let config = unsafe { gl_display.find_configs(template) }
             .context(GlutinSnafu {
                 thing: "config iterator",
             })?

@@ -21,11 +21,15 @@ use std::path::PathBuf;
 use crab_common::{
     config::Config,
     dirs::{CommonError, get_config_file},
-    gui::{DISPLAYS_PAGE, INIT_MODE, PERMISSION_MODE, SETTINGS_MODE},
+    gui::{DISPLAYS_PAGE, INIT_MODE, PERMISSION_MODE, PromptSpot, SETTINGS_MODE},
 };
 use settings::Page;
 use snafu::Snafu;
 
+#[cfg(not(any(feature = "wayland", feature = "x11")))]
+compile_error!("enable at least one desktop feature: hyprland, kde or x11");
+
+mod backend;
 mod desktop;
 mod keyboard;
 mod outputs;
@@ -46,7 +50,7 @@ enum GuiError {
     ))]
     Configured { path: PathBuf },
     #[snafu(display(
-        "Usage: crab-gui [{SETTINGS_MODE} [{DISPLAYS_PAGE}] | {INIT_MODE} | {PERMISSION_MODE}]"
+        "Usage: crab-gui [{SETTINGS_MODE} [{DISPLAYS_PAGE}] | {INIT_MODE} | {PERMISSION_MODE} [left|right <edge> <middle>]]"
     ))]
     Usage,
 }
@@ -67,7 +71,11 @@ fn main() -> Result<(), GuiError> {
             }
             Ok(settings::run(None, Page::General)?)
         }
-        [PERMISSION_MODE] => Ok(permission::run()?),
+        [PERMISSION_MODE] => Ok(permission::run(None)?),
+        [PERMISSION_MODE, spot @ ..] => {
+            let spot = PromptSpot::parse(spot).ok_or(GuiError::Usage)?;
+            Ok(permission::run(Some(spot))?)
+        }
         _ => UsageSnafu.fail(),
     }
 }

@@ -38,3 +38,9 @@ exit = "warn"
 # as_conversions = "warn"
 
 
+
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"

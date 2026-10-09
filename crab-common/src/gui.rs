@@ -28,3 +28,60 @@ pub const PERMISSION_MAX_HEIGHT: u16 = 608;
 pub const GENERATE_COMMAND: &str = "generate";
 pub const INSTALL_HOOKS_COMMAND: &str = "install-hooks";
 pub const UNINSTALL_HOOKS_COMMAND: &str = "uninstall-hooks";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptSpot {
+    pub left: bool,
+    pub edge: i32,
+    pub middle: i32,
+}
+
+impl PromptSpot {
+    const LEFT: &str = "left";
+    const RIGHT: &str = "right";
+
+    #[must_use]
+    pub fn args(&self) -> [String; 3] {
+        [
+            if self.left { Self::LEFT } else { Self::RIGHT }.to_owned(),
+            self.edge.to_string(),
+            self.middle.to_string(),
+        ]
+    }
+
+    #[must_use]
+    pub fn parse(args: &[&str]) -> Option<Self> {
+        let [side, edge, middle] = args else {
+            return None;
+        };
+        let left = match *side {
+            Self::LEFT => true,
+            Self::RIGHT => false,
+            _ => return None,
+        };
+        Some(Self {
+            left,
+            edge: edge.parse().ok()?,
+            middle: middle.parse().ok()?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_spot_round_trips_through_args() {
+        let spot = PromptSpot {
+            left: true,
+            edge: -12,
+            middle: 540,
+        };
+        let args = spot.args();
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        assert_eq!(PromptSpot::parse(&args), Some(spot));
+        assert_eq!(PromptSpot::parse(&["up", "1", "2"]), None);
+        assert_eq!(PromptSpot::parse(&["left", "1"]), None);
+    }
+}

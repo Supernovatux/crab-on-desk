@@ -5,15 +5,23 @@ edition = "2024"
 
 [dependencies]
 crab-common = { version = "0.1.0", path = "../crab-common" }
-hyprland = { version = "0.4.0-beta.3", default-features = false, features = ["dispatch"] }
-iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "wayland", "x11", "thread-pool", "linux-theme-detection", "crisp", "image-without-codecs"] }
+hyprland = { version = "0.4.0-beta.3", default-features = false, features = ["dispatch"], optional = true }
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "thread-pool", "linux-theme-detection", "crisp", "image-without-codecs"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 mundy = { version = "0.2.3", default-features = false, features = ["async-io", "accent-color", "color-scheme"] }
 serde.workspace = true
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
-smithay-client-toolkit = "0.21.1"
+smithay-client-toolkit = { version = "0.21.1", optional = true, default-features = false }
 snafu.workspace = true
-wayland-client = "0.31.15"
+wayland-client = { version = "0.31.15", optional = true }
+x11rb = { version = "0.13.2", features = ["randr"], optional = true }
 
 [lints]
 workspace = true
+
+[features]
+default = ["hyprland", "kde", "x11"]
+wayland = ["iced/wayland", "dep:smithay-client-toolkit", "dep:wayland-client"]
+hyprland = ["wayland", "dep:hyprland"]
+kde = ["wayland"]
+x11 = ["iced/x11", "dep:x11rb", "crab-common/x11"]

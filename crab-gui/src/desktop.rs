@@ -14,36 +14,39 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use crab_common::desktop::{self, Compositor};
-use hyprland::{
-    dispatch::{Dispatch, DispatchType, WindowIdentifier},
-    error::HyprError,
-};
-use snafu::{ResultExt, Snafu};
+use snafu::Snafu;
 
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum DesktopError {
+    #[cfg(feature = "hyprland")]
     #[snafu(display("Hyprland could not focus the window of process {pid}"))]
-    Focus { source: HyprError, pid: u32 },
+    Hyprland {
+        source: hyprland::error::HyprError,
+        pid: u32,
+    },
+    #[cfg(feature = "x11")]
+    #[snafu(context(false))]
+    X11 {
+        source: crate::backend::x11::X11Error,
+    },
 }
 
 pub trait Desktop {
     fn focus(&self, pid: u32) -> Result<(), DesktopError>;
 }
 
-struct Hyprland;
-
-impl Desktop for Hyprland {
-    fn focus(&self, pid: u32) -> Result<(), DesktopError> {
-        Dispatch::call(DispatchType::FocusWindow(WindowIdentifier::ProcessId(pid)))
-            .context(FocusSnafu { pid })
-    }
-}
-
 #[must_use]
 pub fn detect() -> Option<Box<dyn Desktop>> {
+    use crab_common::desktop;
+
     match desktop::detect()? {
-        Compositor::Hyprland => Some(Box::new(Hyprland)),
-        Compositor::KWin => None,
+        #[cfg(feature = "hyprland")]
+        desktop::Session::Wayland(Some(desktop::Compositor::Hyprland)) => {
+            Some(Box::new(crate::backend::hyprland::Hyprland))
+        }
+        #[cfg(feature = "x11")]
+        desktop::Session::X11 => Some(Box::new(crate::backend::x11::X11)),
+        _ => None,
     }
 }

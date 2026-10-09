@@ -22,10 +22,10 @@ use std::io::{self, Read, Write};
 
 use crab_common::{
     agent::{AgentEvent, MAX_MESSAGE_BYTES, PermissionDecision},
-    gui::{PERMISSION_APP_ID, PERMISSION_MAX_HEIGHT},
+    gui::{PERMISSION_APP_ID, PERMISSION_MAX_HEIGHT, PromptSpot},
 };
 use iced::{
-    Element, Fill, Font, Length, Size, Subscription, Task,
+    Element, Fill, Font, Length, Point, Size, Subscription, Task,
     alignment::Horizontal,
     widget::{
         Column, button, column, container, operation, row, scrollable,
@@ -136,9 +136,10 @@ struct Prompt {
     answers: Vec<Answer>,
     card_height: f32,
     window: Size,
+    spot: Option<PromptSpot>,
 }
 
-pub fn run() -> Result<(), PermissionError> {
+pub fn run(spot: Option<PromptSpot>) -> Result<(), PermissionError> {
     let Some(request) = read_request()? else {
         return Ok(());
     };
@@ -159,6 +160,7 @@ pub fn run() -> Result<(), PermissionError> {
             question: 0,
             card_height: INITIAL_HEIGHT,
             window: initial,
+            spot,
         },
         Prompt::update,
         Prompt::view,
@@ -171,7 +173,7 @@ pub fn run() -> Result<(), PermissionError> {
     })
     .title(PERMISSION_TITLE)
     .theme(style::theme(appearance))
-    .window(window_settings(initial))
+    .window(window_settings(initial, spot))
     .run()
     .context(WindowSnafu)
 }
@@ -193,9 +195,12 @@ const fn width(kind: &Kind) -> f32 {
     }
 }
 
-fn window_settings(size: Size) -> window::Settings {
+fn window_settings(size: Size, spot: Option<PromptSpot>) -> window::Settings {
     window::Settings {
         size,
+        position: spot.map_or(window::Position::Default, |spot| {
+            window::Position::Specific(top_left(spot, size))
+        }),
         min_size: Some(size),
         max_size: Some(size),
         platform_specific: platform_settings(),
@@ -216,13 +221,22 @@ fn platform_settings() -> window::settings::PlatformSpecific {
     window::settings::PlatformSpecific::default()
 }
 
-fn pin(size: Size) -> Task<Message> {
+fn top_left(spot: PromptSpot, size: Size) -> Point {
+    let edge = f64::from(spot.edge) as f32;
+    Point::new(
+        if spot.left { edge - size.width } else { edge },
+        f64::from(spot.middle) as f32 - size.height / 2.0,
+    )
+}
+
+fn pin(size: Size, spot: Option<PromptSpot>) -> Task<Message> {
     window::latest().and_then(move |id| {
         window::set_max_size(id, None)
             .chain(window::set_min_size(id, None))
             .chain(window::resize(id, size))
             .chain(window::set_min_size(id, Some(size)))
             .chain(window::set_max_size(id, Some(size)))
+            .chain(spot.map_or_else(Task::none, |spot| window::move_to(id, top_left(spot, size))))
     })
 }
 
@@ -322,7 +336,7 @@ impl Prompt {
                 {
                     return Task::none();
                 }
-                pin(self.window)
+                pin(self.window, self.spot)
             }
         }
     }
@@ -382,7 +396,7 @@ impl Prompt {
             return Task::none();
         }
         self.window = size;
-        pin(size)
+        pin(size, self.spot)
     }
 
     fn view(&self) -> Element<'_, Message> {
