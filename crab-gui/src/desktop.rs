@@ -25,6 +25,11 @@ pub enum DesktopError {
         source: hyprland::error::HyprError,
         pid: u32,
     },
+    #[cfg(feature = "gnome")]
+    #[snafu(context(false))]
+    Gnome {
+        source: crab_common::gnome::GnomeError,
+    },
     #[cfg(feature = "x11")]
     #[snafu(context(false))]
     X11 {
@@ -44,6 +49,10 @@ pub fn detect() -> Option<Box<dyn Desktop>> {
         #[cfg(feature = "hyprland")]
         desktop::Session::Wayland(Some(desktop::Compositor::Hyprland)) => {
             Some(Box::new(crate::backend::hyprland::Hyprland))
+        }
+        #[cfg(feature = "gnome")]
+        desktop::Session::Wayland(Some(desktop::Compositor::Gnome)) => {
+            Some(Box::new(crate::backend::gnome::Gnome))
         }
         #[cfg(feature = "x11")]
         desktop::Session::X11 => Some(Box::new(crate::backend::x11::X11)),

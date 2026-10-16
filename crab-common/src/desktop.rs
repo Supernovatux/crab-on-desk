@@ -21,6 +21,7 @@ pub const X11_DISPLAY: &str = "DISPLAY";
 pub const HYPRLAND_INSTANCE: &str = "HYPRLAND_INSTANCE_SIGNATURE";
 pub const CURRENT_DESKTOP: &str = "XDG_CURRENT_DESKTOP";
 pub const KDE_DESKTOP: &str = "KDE";
+pub const GNOME_DESKTOP: &str = "GNOME";
 pub const KWIN_CURSOR_SCRIPT: &str = "crab-on-desk-cursor.js";
 pub const KWIN_PLACEMENT_SCRIPT: &str = "crab-on-desk-placement.js";
 pub const HYPRLAND_RUNTIME_DIR: &str = "hypr";
@@ -36,6 +37,7 @@ pub enum Session {
 pub enum Compositor {
     Hyprland,
     KWin,
+    Gnome,
 }
 
 #[must_use]
@@ -50,7 +52,13 @@ fn compositor() -> Option<Compositor> {
     if env::var_os(HYPRLAND_INSTANCE).is_some() {
         return Some(Compositor::Hyprland);
     }
-    env::var(CURRENT_DESKTOP)
-        .is_ok_and(|desktops| desktops.split(':').any(|desktop| desktop == KDE_DESKTOP))
-        .then_some(Compositor::KWin)
+    let desktops = env::var(CURRENT_DESKTOP).unwrap_or_default();
+    let is = |name| desktops.split(':').any(|desktop| desktop == name);
+    if is(KDE_DESKTOP) {
+        Some(Compositor::KWin)
+    } else if is(GNOME_DESKTOP) {
+        Some(Compositor::Gnome)
+    } else {
+        None
+    }
 }

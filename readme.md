@@ -59,7 +59,7 @@ make themes-install # for source themes
 ```
 Make sure `~/.local/bin` is on your `PATH`.
 
-All desktops are built by default. To build only some, pass a subset of `hyprland`, `kde` and `x11`:
+All desktops are built by default. To build only some, pass a subset of `hyprland`, `kde`, `gnome` and `x11`:
 ```sh
 make install FEATURES="hyprland x11"
 ```
@@ -71,6 +71,8 @@ crab-widget
 On the first start there is no configuration yet, so a setup window opens. Pick a theme, choose whether the pet may roam, and optionally install the Claude Code hooks. Your existing `~/.claude/settings.json` is backed up to `settings.json.crab-on-desk.bak` before it is changed. Press Finish and the pet appears.
 
 Right-click the pet to open the settings.
+
+On GNOME (Wayland) the pet needs its Shell extension, which `make install` copies next to the binaries (`~/.local/share/gnome-shell/extensions/crab-on-desk@supernovatux`). Log out and in once so the shell sees it, then run `gnome-extensions enable crab-on-desk@supernovatux`. Without the extension the widget exits and tells you so.
 
 To start the widget with your session on Hyprland, add this to your config:
 ```

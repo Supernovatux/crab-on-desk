@@ -23,6 +23,7 @@ pub const DISPLAYS_PAGE: &str = "displays";
 pub const SETTINGS_LOCK: &str = "crab-on-desk-settings.lock";
 pub const WIDGET_LOCK: &str = "crab-on-desk-widget.lock";
 pub const SETTINGS_APP_ID: &str = "com.supernovatux.CrabOnDesk";
+pub const WIDGET_APP_ID: &str = "com.supernovatux.CrabOnDesk.Widget";
 pub const PERMISSION_APP_ID: &str = "com.supernovatux.CrabOnDesk.Permission";
 pub const PERMISSION_MAX_HEIGHT: u16 = 608;
 pub const GENERATE_COMMAND: &str = "generate";

@@ -27,7 +27,7 @@ use settings::Page;
 use snafu::Snafu;
 
 #[cfg(not(any(feature = "wayland", feature = "x11")))]
-compile_error!("enable at least one desktop feature: hyprland, kde or x11");
+compile_error!("enable at least one desktop feature: hyprland, kde, gnome or x11");
 
 mod backend;
 mod desktop;

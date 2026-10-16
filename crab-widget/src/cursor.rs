@@ -32,6 +32,11 @@ pub enum CursorError {
     KWin {
         source: crate::backend::kwin::KWinError,
     },
+    #[cfg(feature = "gnome")]
+    #[snafu(context(false))]
+    Gnome {
+        source: crab_common::gnome::GnomeError,
+    },
     #[cfg(feature = "x11")]
     #[snafu(context(false))]
     X11 {
@@ -52,6 +57,10 @@ pub fn open() -> Result<Box<dyn CursorSource>, CursorError> {
         #[cfg(feature = "kde")]
         Some(desktop::Session::Wayland(Some(desktop::Compositor::KWin))) => {
             Ok(Box::new(crate::backend::kwin::Cursor::open()?))
+        }
+        #[cfg(feature = "gnome")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::Gnome))) => {
+            Ok(Box::new(crate::backend::gnome::Cursor::open()?))
         }
         #[cfg(feature = "x11")]
         Some(desktop::Session::X11) => Ok(Box::new(crate::backend::x11::Cursor::open()?)),

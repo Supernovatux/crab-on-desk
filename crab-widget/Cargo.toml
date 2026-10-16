@@ -26,7 +26,7 @@ zbus = { version = "5.19.0", optional = true }
 workspace = true
 
 [features]
-default = ["hyprland", "kde", "x11"]
+default = ["hyprland", "kde", "x11", "gnome"]
 wayland = [
     "dep:calloop-wayland-source",
     "dep:smithay-client-toolkit",
@@ -36,4 +36,5 @@ wayland = [
 ]
 hyprland = ["wayland", "dep:hyprland"]
 kde = ["wayland", "dep:zbus"]
+gnome = ["wayland", "dep:zbus", "crab-common/gnome"]
 x11 = ["dep:x11rb", "crab-common/x11"]

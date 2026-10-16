@@ -47,6 +47,11 @@ pub enum PlacementError {
     KWin {
         source: crate::backend::kwin::KWinError,
     },
+    #[cfg(feature = "gnome")]
+    #[snafu(context(false))]
+    Gnome {
+        source: crab_common::gnome::GnomeError,
+    },
     #[cfg(feature = "x11")]
     #[snafu(context(false))]
     X11 {
@@ -134,6 +139,10 @@ pub fn open() -> Result<Box<dyn Placer>, PlacementError> {
         #[cfg(feature = "kde")]
         Some(desktop::Session::Wayland(Some(desktop::Compositor::KWin))) => {
             Ok(Box::new(crate::backend::kwin::Placer::open()?))
+        }
+        #[cfg(feature = "gnome")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::Gnome))) => {
+            Ok(Box::new(crate::backend::gnome::Placer::open()?))
         }
         #[cfg(feature = "x11")]
         Some(desktop::Session::X11) => Ok(Box::new(crate::backend::x11::Placer::open()?)),

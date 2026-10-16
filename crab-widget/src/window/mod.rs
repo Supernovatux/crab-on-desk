@@ -34,6 +34,8 @@ use crate::{
     theme::{Theme, ThemeError},
 };
 
+#[cfg(feature = "gnome")]
+mod gnome;
 #[cfg(feature = "wayland")]
 mod wayland;
 mod widget;
@@ -48,6 +50,11 @@ pub enum WindowError {
     #[cfg(feature = "wayland")]
     #[snafu(context(false))]
     Wayland { source: wayland::WaylandError },
+    #[cfg(feature = "gnome")]
+    #[snafu(context(false))]
+    Gnome {
+        source: crab_common::gnome::GnomeError,
+    },
     #[cfg(feature = "x11")]
     #[snafu(context(false))]
     X11 {
@@ -189,6 +196,10 @@ fn create(theme: Arc<Theme>, events: Sender<WindowEvent>) -> Result<Box<dyn Wind
     use crate::renderer::opengl::Opengl;
 
     match desktop::detect() {
+        #[cfg(feature = "gnome")]
+        Some(Session::Wayland(Some(desktop::Compositor::Gnome))) => {
+            gnome::open::<Opengl>(theme, events)
+        }
         #[cfg(feature = "wayland")]
         Some(Session::Wayland(_)) => wayland::open::<Opengl>(theme, events),
         #[cfg(feature = "x11")]

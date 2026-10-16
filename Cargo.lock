@@ -872,6 +872,7 @@ dependencies = [
  "snafu",
  "toml",
  "x11rb",
+ "zbus",
 ]
 
 [[package]]

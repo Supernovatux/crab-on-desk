@@ -21,6 +21,8 @@ pub mod config;
 pub mod control;
 pub mod desktop;
 pub mod dirs;
+#[cfg(feature = "gnome")]
+pub mod gnome;
 pub mod gui;
 pub mod hooks;
 pub mod ipc;

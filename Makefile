@@ -9,10 +9,14 @@ ifeq ($(shell id -u),0)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 THEMEDIR ?= $(PREFIX)/share/crab-on-desk/themes
+EXTENSIONS_DIR ?= $(PREFIX)/share/gnome-shell/extensions
 else
 BINDIR ?= $(HOME)/.local/bin
 THEMEDIR ?= $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/crab-on-desk/themes
+EXTENSIONS_DIR ?= $(or $(XDG_DATA_HOME),$(HOME)/.local/share)/gnome-shell/extensions
 endif
+EXTENSION_UUID := crab-on-desk@supernovatux
+WITH_GNOME := $(if $(FEATURES),$(filter gnome,$(FEATURES)),yes)
 
 BUILD := build
 CLAWD_REPO := https://github.com/rullerzhou-afk/clawd-on-desk.git
@@ -32,9 +36,13 @@ build:
 
 install: build
 	install -Dm755 -t "$(DESTDIR)$(BINDIR)" $(addprefix $(RELEASE)/,$(BINS))
+ifneq ($(WITH_GNOME),)
+	install -Dm644 -t "$(DESTDIR)$(EXTENSIONS_DIR)/$(EXTENSION_UUID)" gnome-extension/extension.js gnome-extension/metadata.json
+endif
 
 uninstall:
 	rm -f $(addprefix "$(DESTDIR)$(BINDIR)"/,$(BINS))
+	rm -rf "$(DESTDIR)$(EXTENSIONS_DIR)/$(EXTENSION_UUID)"
 
 themes: $(BUILD)/themes.stamp
 

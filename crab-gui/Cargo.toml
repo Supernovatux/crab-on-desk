@@ -20,8 +20,9 @@ x11rb = { version = "0.13.2", features = ["randr"], optional = true }
 workspace = true
 
 [features]
-default = ["hyprland", "kde", "x11"]
+default = ["hyprland", "kde", "x11", "gnome"]
 wayland = ["iced/wayland", "dep:smithay-client-toolkit", "dep:wayland-client"]
 hyprland = ["wayland", "dep:hyprland"]
 kde = ["wayland"]
+gnome = ["wayland", "crab-common/gnome"]
 x11 = ["iced/x11", "dep:x11rb", "crab-common/x11"]

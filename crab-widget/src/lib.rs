@@ -15,7 +15,7 @@
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #[cfg(not(any(feature = "wayland", feature = "x11")))]
-compile_error!("enable at least one desktop feature: hyprland, kde or x11");
+compile_error!("enable at least one desktop feature: hyprland, kde, gnome or x11");
 
 pub mod agent;
 pub mod backend;

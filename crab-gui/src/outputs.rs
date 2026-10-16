@@ -28,6 +28,11 @@ pub enum OutputsError {
     Wayland {
         source: backend::wayland::WaylandError,
     },
+    #[cfg(feature = "gnome")]
+    #[snafu(context(false))]
+    Gnome {
+        source: crab_common::gnome::GnomeError,
+    },
     #[cfg(feature = "x11")]
     #[snafu(context(false))]
     X11 { source: backend::x11::X11Error },
@@ -43,6 +48,10 @@ pub struct Output {
 
 pub fn list() -> Result<Vec<Output>, OutputsError> {
     match desktop::detect() {
+        #[cfg(feature = "gnome")]
+        Some(desktop::Session::Wayland(Some(desktop::Compositor::Gnome))) => {
+            Ok(backend::gnome::outputs()?)
+        }
         #[cfg(feature = "wayland")]
         Some(desktop::Session::Wayland(_)) => Ok(backend::wayland::outputs()?),
         #[cfg(feature = "x11")]
