@@ -2,7 +2,7 @@
   "uuid": "crab-on-desk@supernovatux",
   "name": "Crab on Desk",
   "description": "Lets the Crab on Desk widget position itself, stay on top and follow the pointer on GNOME Wayland.",
-  "shell-version": ["50"],
+  "shell-version": ["50", "51"],
   "url": "https://github.com/supernovatux/crab-on-desk",
   "license": "GPL-2.0-or-later"
 }

@@ -169,7 +169,8 @@ export default class CrabOnDesk extends Extension {
         this._widget.window = window;
         this._updateLayer();
         window.stick();
-        window.hide_from_window_list();
+        if (typeof window.hide_from_window_list === 'function')
+            window.hide_from_window_list();
         this._home(window);
         const {ids} = this._tracked.get(window);
         ids.push(window.connect('shown', () => this._home(window)));
