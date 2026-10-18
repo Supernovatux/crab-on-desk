@@ -18,12 +18,19 @@ mod catalog;
 mod style;
 mod view;
 
-use std::{fs::File, io, path::PathBuf};
+use std::{
+    fmt,
+    fs::File,
+    io,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use crab_common::{
     config::Config,
     control::{Control, Message as WidgetMessage},
     dirs::{CommonError, get_settings_lock, get_sibling_executable},
+    gpu::{GPUS_COMMAND, GpuChoice, GpuInfo, GraphicsApi},
     gui::{SETTINGS_APP_ID, WIDGET_BINARY},
     hooks, ipc, process,
 };
@@ -82,6 +89,9 @@ enum Message {
     FreeRoam(bool),
     TrackCursor(bool),
     PositionWindow(bool),
+    Vulkan(bool),
+    Gpu(GpuOption),
+    Gpus(Vec<GpuInfo>),
     SelectTheme(String),
     Hooks(bool),
     Finish,
@@ -90,6 +100,18 @@ enum Message {
     Mapped,
     QuitWidget,
     Close,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GpuOption {
+    choice: GpuChoice,
+    label: String,
+}
+
+impl fmt::Display for GpuOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.label)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +141,9 @@ struct Settings {
     free_roam: bool,
     track_cursor: bool,
     position_window: bool,
+    renderer: GraphicsApi,
+    gpu: GpuChoice,
+    gpus: Vec<GpuInfo>,
     themes: Vec<ThemeEntry>,
     hooks: Hooks,
     hooks_warning: HooksWarning,
@@ -145,7 +170,14 @@ pub fn run(config: Option<Config>, page: Page) -> Result<(), SettingsError> {
         SETUP_TITLE
     };
     iced::application(
-        move || Settings::new(colors, config.clone(), page),
+        move || {
+            let settings = Settings::new(colors, config.clone(), page);
+            let gpus = match settings.mode {
+                Mode::Settings => Task::perform(async { list_gpus() }, Message::Gpus),
+                Mode::Setup => Task::none(),
+            };
+            (settings, gpus)
+        },
         Settings::update,
         Settings::view,
     )
@@ -193,6 +225,21 @@ fn notify_widget(message: &WidgetMessage) -> Result<bool, String> {
     Ok(true)
 }
 
+fn list_gpus() -> Vec<GpuInfo> {
+    let Ok(program) = get_sibling_executable(WIDGET_BINARY) else {
+        return Vec::new();
+    };
+    Command::new(program)
+        .arg(GPUS_COMMAND)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice(&output.stdout).ok())
+        .unwrap_or_default()
+}
+
 fn start_widget() -> Result<(), String> {
     if notify_widget(&WidgetMessage::Control(Control::Reload))? {
         return Ok(());
@@ -218,6 +265,12 @@ impl Settings {
             free_roam: config.as_ref().is_some_and(|config| config.free_roam),
             track_cursor: config.as_ref().is_none_or(|config| config.track_cursor),
             position_window: config.as_ref().is_none_or(|config| config.position_window),
+            renderer: config.as_ref().map(|config| config.renderer).unwrap_or_default(),
+            gpu: config
+                .as_ref()
+                .map(|config| config.gpu.clone())
+                .unwrap_or_default(),
+            gpus: Vec::new(),
             theme: config.map(|config| config.default_theme),
             themes: Vec::new(),
             hooks: Hooks::Missing,
@@ -270,6 +323,19 @@ impl Settings {
                 self.position_window = enabled;
                 self.save();
             }
+            Message::Vulkan(enabled) => {
+                self.renderer = if enabled {
+                    GraphicsApi::Vulkan
+                } else {
+                    GraphicsApi::Opengl
+                };
+                self.save();
+            }
+            Message::Gpu(option) => {
+                self.gpu = option.choice;
+                self.save();
+            }
+            Message::Gpus(gpus) => self.gpus = gpus,
             Message::SelectTheme(theme) => {
                 self.theme = Some(theme);
                 self.save();
@@ -320,6 +386,8 @@ impl Settings {
             free_roam: self.free_roam,
             track_cursor: self.track_cursor,
             position_window: self.position_window,
+            renderer: self.renderer,
+            gpu: self.gpu.clone(),
         })
     }
 
@@ -368,6 +436,30 @@ impl Settings {
             Ok(false) => self.say(offline),
             Err(error) => self.fail(error),
         }
+    }
+
+    fn gpu_options(&self) -> Vec<GpuOption> {
+        let mut options = vec![
+            GpuOption {
+                choice: GpuChoice::Integrated,
+                label: "Integrated (default)".to_owned(),
+            },
+            GpuOption {
+                choice: GpuChoice::Discrete,
+                label: "Discrete".to_owned(),
+            },
+        ];
+        options.extend(self.gpus.iter().map(|gpu| GpuOption {
+            choice: gpu.id.clone(),
+            label: format!("{} \u{b7} {}", gpu.name, gpu.kind),
+        }));
+        if !options.iter().any(|option| option.choice == self.gpu) {
+            options.push(GpuOption {
+                choice: self.gpu.clone(),
+                label: format!("{} (not found)", self.gpu),
+            });
+        }
+        options
     }
 
     fn is_active(&self, theme: &str) -> bool {

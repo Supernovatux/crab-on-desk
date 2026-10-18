@@ -17,11 +17,14 @@
 use iced::{
     Alignment, ContentFit, Element, Fill, Length,
     widget::{
-        Column, button, column, container, grid, image, mouse_area, row, rule, scrollable,
+        Column, button, column, container, grid, image, mouse_area, pick_list, row, rule,
+        scrollable,
         scrollable::{Direction, Scrollbar},
         space, text, toggler,
     },
 };
+
+use crab_common::gpu::GraphicsApi;
 
 use super::{Hooks, Message, Mode, Page, Settings, catalog::ThemeEntry, style, style::Tone};
 use crate::theme::{BOLD, MEDIUM, SEMIBOLD};
@@ -49,6 +52,7 @@ const BUTTON_PADDING: [u16; 2] = [7, 10];
 const TOAST_PADDING: [u16; 2] = [10, 14];
 const TOAST_MARGIN: u16 = 16;
 const SWITCH_SIZE: f32 = 24.0;
+const GPU_LIST_WIDTH: f32 = 260.0;
 const SCROLLBAR_WIDTH: f32 = 6.0;
 
 const BODY_SIZE: u32 = 13;
@@ -92,7 +96,7 @@ impl Settings {
             (Mode::Settings, Page::General) => (
                 self.page.label(),
                 self.page.subtitle(),
-                column![self.general(), self.widget()]
+                column![self.general(), self.rendering(), self.widget()]
                     .spacing(SECTION_GAP)
                     .into(),
             ),
@@ -210,6 +214,40 @@ impl Settings {
                 ),
             ],
         )
+    }
+
+    fn rendering(&self) -> Element<'_, Message> {
+        let colors = self.colors;
+        let vulkan = self.renderer == GraphicsApi::Vulkan;
+        let mut rows = vec![self.row(
+            "Vulkan renderer",
+            Some("Draw the crab with Vulkan. Off uses OpenGL. Falls back to OpenGL if Vulkan is unavailable."),
+            toggler(vulkan)
+                .size(SWITCH_SIZE)
+                .on_toggle(Message::Vulkan)
+                .style(move |theme, status| style::switch(colors, theme, status))
+                .into(),
+        )];
+        if vulkan {
+            let options = self.gpu_options();
+            let selected = options
+                .iter()
+                .find(|option| option.choice == self.gpu)
+                .cloned();
+            rows.push(self.row(
+                "GPU",
+                Some("Integrated uses the least power. Another GPU stays awake while the crab is shown."),
+                pick_list(options, selected, Message::Gpu)
+                    .text_size(BUTTON_SIZE)
+                    .font(MEDIUM)
+                    .padding(BUTTON_PADDING)
+                    .width(GPU_LIST_WIDTH)
+                    .style(move |theme, status| style::select(colors, theme, status))
+                    .menu_style(move |theme| style::menu(colors, theme))
+                    .into(),
+            ));
+        }
+        section(self, "Rendering", rows)
     }
 
     fn widget(&self) -> Element<'_, Message> {

@@ -16,6 +16,8 @@
 
 #[cfg(not(any(feature = "wayland", feature = "x11")))]
 compile_error!("enable at least one desktop feature: hyprland, kde, gnome or x11");
+#[cfg(not(any(feature = "vulkan", feature = "opengl")))]
+compile_error!("enable at least one renderer feature: vulkan or opengl");
 
 pub mod agent;
 pub mod backend;

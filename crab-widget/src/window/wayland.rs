@@ -18,6 +18,7 @@ use std::{ptr::NonNull, sync::Arc, time::Instant};
 
 use calloop::{EventLoop, channel::Sender};
 use calloop_wayland_source::WaylandSource;
+use crab_common::gpu::GpuChoice;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -32,7 +33,13 @@ use smithay_client_toolkit::{
             ext_idle_notification_v1::{self, ExtIdleNotificationV1},
             ext_idle_notifier_v1::ExtIdleNotifierV1,
         },
-        wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+        wp::{
+            cursor_shape::v1::client::wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+            linux_dmabuf::zv1::client::{
+                zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
+                zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
+            },
+        },
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -52,11 +59,10 @@ use smithay_client_toolkit::{
 };
 use snafu::{ResultExt, Snafu};
 use wayland_client::{
-    ConnectError, Connection, DispatchError, Proxy, QueueHandle,
-    globals::{BindError, GlobalError, registry_queue_init},
-    protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_surface},
+    ConnectError, Connection, Dispatch, DispatchError, Proxy, QueueHandle,
+    globals::{BindError, GlobalError, GlobalList, GlobalListContents, registry_queue_init},
+    protocol::{wl_callback, wl_output, wl_pointer, wl_registry, wl_seat, wl_surface},
 };
-use wayland_egl::WlEglSurface;
 
 use super::{
     CalloopSnafu, NAMESPACE, SIZE, Window, WindowError, WindowEvent,
@@ -64,11 +70,16 @@ use super::{
         Button, CursorShape, Output, OutputChange, Pointer, Position, Running, Surface, Widget,
     },
 };
-use crate::{placement::Area, renderer::Renderer, theme::Theme};
+use crate::{
+    placement::Area,
+    renderer::{Renderer, Target},
+    theme::Theme,
+};
 
 const BUTTON_LEFT: u32 = 0x110;
 const BUTTON_RIGHT: u32 = 0x111;
 const INPUT_IDLE_VERSION: u32 = 2;
+const DMABUF_FEEDBACK_VERSION: u32 = 4;
 
 #[derive(Debug, Snafu)]
 pub enum WaylandError {
@@ -87,11 +98,6 @@ pub enum WaylandError {
     Dispatch { source: DispatchError },
     #[snafu(display("Window handle not available."))]
     Window,
-    #[snafu(display("Wayland error while {thing}."))]
-    Wayland {
-        source: wayland_egl::Error,
-        thing: String,
-    },
     #[snafu(display("Unable to create the input region"))]
     #[snafu(context(false))]
     Region { source: SctkGlobalError },
@@ -115,7 +121,6 @@ pub struct Wayland<R: Renderer + 'static> {
     idle_notification: Option<ExtIdleNotificationV1>,
     output: Option<wl_output::WlOutput>,
     placement: Placement,
-    egl_window: WlEglSurface,
     size: (u32, u32),
     qh: QueueHandle<State<R>>,
     conn: Connection,
@@ -148,6 +153,7 @@ struct IdleWatch {
 pub fn open<R: Renderer + 'static>(
     theme: Arc<Theme>,
     events: Sender<WindowEvent>,
+    gpu: &GpuChoice,
 ) -> Result<Box<dyn Window>, WindowError> {
     let conn = Connection::connect_to_env().map_err(WaylandError::from)?;
     let (globals, event_queue) = registry_queue_init(&conn).map_err(WaylandError::from)?;
@@ -157,12 +163,15 @@ pub fn open<R: Renderer + 'static>(
     })?;
     let layer_shell = LayerShell::bind(&globals, &qh).context(BindSnafu { thing: "wlr-shell" })?;
     let size = (SIZE, SIZE);
-    let (layer, egl_window, window_handle) =
-        create_layer(&compositor, &layer_shell, &qh, None, size)?;
-    let display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-        NonNull::new(conn.backend().display_ptr().cast()).ok_or(WaylandError::Display)?,
-    ));
-    let renderer = R::setup(display_handle, window_handle, size.0, size.1)?;
+    let (layer, window_handle) = create_layer(&compositor, &layer_shell, &qh, None, size)?;
+    let renderer = R::setup(Target {
+        display: display_handle(&conn)?,
+        window: window_handle,
+        size,
+        device: compositor_device(&conn, &globals),
+        gpu: gpu.clone(),
+        layers: theme.max_layers(),
+    })?;
     let event_loop: EventLoop<State<R>> = EventLoop::try_new().context(CalloopSnafu {
         thing: "creating event loop",
     })?;
@@ -185,7 +194,6 @@ pub fn open<R: Renderer + 'static>(
         idle_notification: None,
         output: None,
         placement: Placement::Anchored,
-        egl_window,
         size,
         qh,
         conn,
@@ -352,7 +360,7 @@ impl<R: Renderer + 'static> Surface for Wayland<R> {
         if self.output.as_ref() == Some(&output) {
             return Ok(OutputChange::Unchanged);
         }
-        let (layer, egl_window, window_handle) = create_layer(
+        let (layer, window_handle) = create_layer(
             &self.compositor,
             &self.layer_shell,
             &self.qh,
@@ -360,14 +368,13 @@ impl<R: Renderer + 'static> Surface for Wayland<R> {
             self.size,
         )?;
         renderer.replace_window(window_handle, self.size.0, self.size.1)?;
-        self.egl_window = egl_window;
         self.layer = layer;
         self.output = Some(output);
         self.placement = Placement::Anchored;
         Ok(OutputChange::Remapped)
     }
 
-    fn present<T: Renderer>(&mut self, renderer: &T) -> Result<bool, WindowError> {
+    fn present<T: Renderer>(&mut self, renderer: &mut T) -> Result<bool, WindowError> {
         let surface = self.layer.wl_surface();
         surface.frame(&self.qh, FrameCallbackData(surface.clone()));
         renderer.swapbuffers()?;
@@ -507,9 +514,6 @@ impl<R: Renderer + 'static> LayerShellHandler for State<R> {
         );
         if size != self.surface.size {
             self.surface.size = size;
-            self.surface
-                .egl_window
-                .resize(size.0 as i32, size.1 as i32, 0, 0);
             self.resized(size);
         }
         self.mapped();
@@ -665,7 +669,7 @@ fn create_layer<R: Renderer + 'static>(
     qh: &QueueHandle<State<R>>,
     output: Option<&wl_output::WlOutput>,
     (width, height): (u32, u32),
-) -> Result<(LayerSurface, WlEglSurface, RawWindowHandle), WaylandError> {
+) -> Result<(LayerSurface, RawWindowHandle), WaylandError> {
     let surface = compositor.create_surface(qh);
     let layer = layer_shell.create_layer_surface(qh, surface, Layer::Top, Some(NAMESPACE), output);
     layer.set_anchor(Anchor::RIGHT);
@@ -674,14 +678,93 @@ fn create_layer<R: Renderer + 'static>(
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
     layer.set_margin(0, 0, 0, 0);
     layer.commit();
-    let egl_window = WlEglSurface::new(layer.wl_surface().id(), width as i32, height as i32)
-        .context(WaylandSnafu {
-            thing: "egl_window",
-        })?;
     let window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(
         NonNull::new(layer.wl_surface().id().as_ptr().cast()).ok_or(WaylandError::Window)?,
     ));
-    Ok((layer, egl_window, window_handle))
+    Ok((layer, window_handle))
+}
+
+#[cfg(feature = "vulkan")]
+pub(super) fn gpus() -> Result<Vec<crab_common::gpu::GpuInfo>, WindowError> {
+    let conn = Connection::connect_to_env().map_err(WaylandError::from)?;
+    let (globals, _queue) =
+        registry_queue_init::<DmabufProbe>(&conn).map_err(WaylandError::from)?;
+    let device = compositor_device(&conn, &globals);
+    crate::renderer::vulkan::list(display_handle(&conn)?, None, device)
+        .map_err(|source| crate::renderer::RendererError::from(source).into())
+}
+
+pub(super) fn display_handle(conn: &Connection) -> Result<RawDisplayHandle, WaylandError> {
+    Ok(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+        NonNull::new(conn.backend().display_ptr().cast()).ok_or(WaylandError::Display)?,
+    )))
+}
+
+#[derive(Default)]
+struct DmabufProbe {
+    device: Option<u64>,
+    done: bool,
+}
+
+pub(super) fn compositor_device(conn: &Connection, globals: &GlobalList) -> Option<u64> {
+    let mut queue = conn.new_event_queue();
+    let qh = queue.handle();
+    let dmabuf: ZwpLinuxDmabufV1 = globals
+        .bind(&qh, DMABUF_FEEDBACK_VERSION..=DMABUF_FEEDBACK_VERSION, ())
+        .ok()?;
+    let feedback = dmabuf.get_default_feedback(&qh, ());
+    let mut probe = DmabufProbe::default();
+    while !probe.done {
+        if queue.blocking_dispatch(&mut probe).is_err() {
+            break;
+        }
+    }
+    feedback.destroy();
+    dmabuf.destroy();
+    probe.device
+}
+
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for DmabufProbe {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_registry::WlRegistry,
+        _event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpLinuxDmabufV1, ()> for DmabufProbe {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpLinuxDmabufV1,
+        _event: zwp_linux_dmabuf_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for DmabufProbe {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpLinuxDmabufFeedbackV1,
+        event: zwp_linux_dmabuf_feedback_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice { device } => {
+                state.device = device.try_into().ok().map(u64::from_ne_bytes);
+            }
+            zwp_linux_dmabuf_feedback_v1::Event::Done => state.done = true,
+            _ => {}
+        }
+    }
 }
 
 smithay_client_toolkit::delegate_dispatch2!(@<R: Renderer + 'static> State<R>);

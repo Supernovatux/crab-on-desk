@@ -4,37 +4,41 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ash = { version = "0.38.0", default-features = false, features = ["loaded", "std"], optional = true }
 calloop = "0.14.4"
 calloop-wayland-source = { version = "0.4.1", optional = true }
 crab-common = { version = "0.1.0", path = "../crab-common" }
-gl = "0.14.0"
-glutin = { version = "0.32.3", default-features = false, features = ["egl"] }
+gl = { version = "0.14.0", optional = true }
+glutin = { version = "0.32.3", default-features = false, features = ["egl"], optional = true }
 hyprland = { version = "0.4.0-beta.3", default-features = false, features = ["data"], optional = true }
 ktx2 = "0.5.0"
+libloading = { version = "0.8.9", optional = true }
 memmap2 = "0.9.11"
 raw-window-handle = "0.6.2"
-rustix = { version = "1.1.5", features = ["net", "process"] }
+rustix = { version = "1.1.5", features = ["fs", "mm", "net", "process"] }
 serde_json = "1.0.151"
 smithay-client-toolkit = { version = "0.21.1", optional = true, default-features = false }
 snafu.workspace = true
-wayland-client = { version = "0.31.15", optional = true }
-wayland-egl = { version = "0.32.11", optional = true }
-x11rb = { version = "0.13.2", default-features = false, features = ["dl-libxcb", "randr", "shape", "sync", "cursor", "resource_manager"], optional = true }
+wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"], optional = true }
+wayland-client = { version = "0.31.15", optional = true, features = ["system"] }
+x11rb = { version = "0.13.2", default-features = false, features = ["dl-libxcb", "randr", "shape", "sync", "cursor", "resource_manager", "dri3"], optional = true }
 zbus = { version = "5.19.0", optional = true }
 
 [lints]
 workspace = true
 
 [features]
-default = ["hyprland", "kde", "x11", "gnome"]
+default = ["hyprland", "kde", "x11", "gnome", "vulkan", "opengl"]
 wayland = [
     "dep:calloop-wayland-source",
     "dep:smithay-client-toolkit",
+    "dep:wayland-backend",
     "dep:wayland-client",
-    "dep:wayland-egl",
-    "glutin/wayland",
+    "glutin?/wayland",
 ]
 hyprland = ["wayland", "dep:hyprland"]
 kde = ["wayland", "dep:zbus"]
 gnome = ["wayland", "dep:zbus", "crab-common/gnome"]
 x11 = ["dep:x11rb", "crab-common/x11"]
+vulkan = ["dep:ash", "dep:libloading"]
+opengl = ["dep:gl", "dep:glutin"]

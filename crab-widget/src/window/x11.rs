@@ -28,6 +28,7 @@ use calloop::{
     EventLoop, EventSource, Interest, Mode, Poll, PostAction, Readiness, Token, TokenFactory,
     channel::Sender, generic::Generic,
 };
+use crab_common::gpu::GpuChoice;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, XcbDisplayHandle, XcbWindowHandle};
 use snafu::{OptionExt, ResultExt};
 use x11rb::{
@@ -37,6 +38,7 @@ use x11rb::{
     properties::{WmHints, WmSizeHints, WmSizeHintsSpecification},
     protocol::{
         Event,
+        dri3::ConnectionExt as _,
         randr::{self, ConnectionExt as _},
         shape::{self, ConnectionExt as _},
         sync::{self, ConnectionExt as _},
@@ -59,7 +61,7 @@ use super::{
 use crate::{
     backend::x11::{self as backend, InvalidWindowSnafu, NoScreenSnafu, X11Error},
     placement::Area,
-    renderer::Renderer,
+    renderer::{Renderer, Target},
     theme::Theme,
 };
 
@@ -117,6 +119,7 @@ struct IdleWatch {
 pub fn open<R: Renderer + 'static>(
     theme: Arc<Theme>,
     events: Sender<WindowEvent>,
+    gpu: &GpuChoice,
 ) -> Result<Box<dyn Window>, WindowError> {
     let (conn, number) = backend::connect()?;
     let conn = Rc::new(conn);
@@ -165,7 +168,14 @@ pub fn open<R: Renderer + 'static>(
     let mut window_handle =
         XcbWindowHandle::new(NonZeroU32::new(window).context(InvalidWindowSnafu)?);
     window_handle.visual_id = NonZeroU32::new(visual);
-    let renderer = R::setup(display, RawWindowHandle::Xcb(window_handle), size.0, size.1)?;
+    let renderer = R::setup(Target {
+        display,
+        window: RawWindowHandle::Xcb(window_handle),
+        size,
+        device: compositor_device(&conn, screen.root),
+        gpu: gpu.clone(),
+        layers: theme.max_layers(),
+    })?;
     let event_loop: EventLoop<State<R>> = EventLoop::try_new().context(CalloopSnafu {
         thing: "creating event loop",
     })?;
@@ -555,7 +565,7 @@ impl Surface for X11 {
         Ok(OutputChange::Moved)
     }
 
-    fn present<R: Renderer>(&mut self, renderer: &R) -> Result<bool, WindowError> {
+    fn present<R: Renderer>(&mut self, renderer: &mut R) -> Result<bool, WindowError> {
         renderer.swapbuffers()?;
         Ok(false)
     }
@@ -699,4 +709,25 @@ impl EventSource for Source {
             .filter(|_| !self.pending.is_empty())
             .map(|token| (Readiness::EMPTY, token)))
     }
+}
+
+#[cfg(feature = "vulkan")]
+pub(super) fn gpus() -> Result<Vec<crab_common::gpu::GpuInfo>, WindowError> {
+    let (conn, number) = backend::connect()?;
+    let screen = backend::screen(&conn, number)?;
+    let visual = argb_visual(screen).map_or(screen.root_visual, |(_, visual)| visual);
+    let display = RawDisplayHandle::Xcb(XcbDisplayHandle::new(
+        NonNull::new(conn.get_raw_xcb_connection()),
+        number as i32,
+    ));
+    let device = compositor_device(&conn, screen.root);
+    crate::renderer::vulkan::list(display, Some(visual), device)
+        .map_err(|source| crate::renderer::RendererError::from(source).into())
+}
+
+fn compositor_device(conn: &XCBConnection, root: XWindow) -> Option<u64> {
+    let reply = conn.dri3_open(root, NONE).ok()?.reply().ok()?;
+    rustix::fs::fstat(&reply.device_fd)
+        .ok()
+        .map(|stat| stat.st_rdev)
 }

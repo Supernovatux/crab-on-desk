@@ -4,7 +4,7 @@ A pixel pet for coding agents.
 This project is a Linux-focused Rust clone of [rullerzhou-afk/clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk). Thanks to the original project for the ideas, UI layouts, animations, state mappings, etc.
 
 ## Goals
-1. Use minimal RAM and CPU. (Currently uses about 84MB of ram and almost 0 CPU.)
+1. Use minimal RAM and CPU. (Currently uses about 26MB of RAM and 0.5% of one core with Vulkan, 84MB with OpenGL.)
 2. Make the widget feature-complete with the original project.
 
 ## Features
@@ -16,10 +16,9 @@ This project is a Linux-focused Rust clone of [rullerzhou-afk/clawd-on-desk](htt
 6. Drag, click reactions, docking at the screen edge, free roam, sleeping when you are away.
 7. Eyes that follow the cursor (Hyprland, KDE Plasma and X11).
 
-### Rendering backend~~s~~
-1. OpenGL
-
-Vulkan will be added in the future.
+### Rendering backends
+1. Vulkan (default). Draws on the integrated GPU unless you pick another one in Settings > General.
+2. OpenGL. Used when Vulkan is unavailable, or when `renderer = "opengl"` is set in `config.toml` (Settings > General > Vulkan renderer).
 
 ### Tested desktop environments
 1. Hyprland (note: background blur needs to be disabled manually.)
@@ -46,7 +45,7 @@ Then start `crab-widget` (see below).
 ### From source
 Requirements:
 - A Wayland compositor that supports `wlr-layer-shell` (for example Hyprland or KDE Plasma), or an X11 session.
-- OpenGL 4.2 or newer (the textures are BC7 compressed).
+- Vulkan 1.3 or OpenGL 4.2 or newer, with BC7 texture support (the textures are BC7 compressed).
 - To build: `git`, a Rust toolchain (`cargo`), `cmake`, `clang`, and network access on the first build (a build script downloads KTX-Software).
 - Only for the themes of the original project: Electron (any `electron` or `electronNN` package).
 
@@ -63,6 +62,7 @@ All desktops are built by default. To build only some, pass a subset of `hyprlan
 ```sh
 make install FEATURES="hyprland x11"
 ```
+Both renderers are built too; `RENDERERS="vulkan"` or `RENDERERS="opengl"` builds only one.
 
 Install at least one theme (see [Themes](#themes)), then start the widget:
 ```sh

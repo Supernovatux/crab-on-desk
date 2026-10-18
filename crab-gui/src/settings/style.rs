@@ -16,8 +16,9 @@
 
 use iced::{
     Background, Border, Color, Theme, color,
+    overlay::menu,
     theme::Palette,
-    widget::{button, container, rule, toggler},
+    widget::{button, container, pick_list, rule, toggler},
 };
 
 use crate::theme::{Appearance, BRAND, Scheme, outline};
@@ -274,6 +275,34 @@ pub fn switch(colors: &Colors, theme: &Theme, status: toggler::Status) -> toggle
         text_color: None,
         border_radius: None,
         padding_ratio: SWITCH_PADDING_RATIO,
+    }
+}
+
+#[must_use]
+pub fn select(colors: &Colors, theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let edge = match status {
+        pick_list::Status::Active => colors.border,
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => accent(theme),
+    };
+    pick_list::Style {
+        text_color: colors.text,
+        placeholder_color: colors.text_secondary,
+        handle_color: colors.text_secondary,
+        background: Background::Color(colors.background),
+        border: outline(edge, BUTTON_RADIUS),
+    }
+}
+
+#[must_use]
+pub fn menu(colors: &Colors, theme: &Theme) -> menu::Style {
+    let accent = accent(theme);
+    menu::Style {
+        background: Background::Color(colors.panel),
+        border: outline(colors.border, BUTTON_RADIUS),
+        text_color: colors.text,
+        selected_text_color: accent,
+        selected_background: Background::Color(tinted(accent, ACCENT_TINT)),
+        shadow: iced::Shadow::default(),
     }
 }
 

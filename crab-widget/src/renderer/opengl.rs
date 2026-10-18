@@ -25,13 +25,13 @@ use glutin::{
     display::{Display as gluDisplay, GlDisplay},
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+use raw_window_handle::RawWindowHandle;
 use snafu::{OptionExt, ResultExt, Snafu, ensure};
 
 use crab_common::atlas::Rect;
 
 use crate::{
-    renderer::{LayerOffset, Renderer, RendererError},
+    renderer::{LayerOffset, Renderer, RendererError, Target},
     theme::Animation,
 };
 
@@ -88,12 +88,13 @@ pub struct Opengl {
 }
 
 impl Renderer for Opengl {
-    fn setup(
-        display: RawDisplayHandle,
-        window: RawWindowHandle,
-        w: u32,
-        h: u32,
-    ) -> Result<Box<Self>, RendererError> {
+    fn setup(target: Target) -> Result<Box<Self>, RendererError> {
+        let Target {
+            display,
+            window,
+            size: (w, h),
+            ..
+        } = target;
         let gl_display = unsafe {
             gluDisplay::new(display, glutin::display::DisplayApiPreference::Egl).context(
                 GlutinSnafu {
@@ -224,7 +225,7 @@ impl Renderer for Opengl {
         self.gl_surface = gl_surface;
         Ok(())
     }
-    fn swapbuffers(&self) -> Result<(), RendererError> {
+    fn swapbuffers(&mut self) -> Result<(), RendererError> {
         self.gl_surface
             .swap_buffers(&self.gl_context)
             .context(GlutinSnafu {
@@ -232,7 +233,7 @@ impl Renderer for Opengl {
             })?;
         Ok(())
     }
-    fn resize(&self, w: u32, h: u32) -> Result<(), RendererError> {
+    fn resize(&mut self, w: u32, h: u32) -> Result<(), RendererError> {
         self.gl_surface.resize(
             &self.gl_context,
             NonZeroU32::new(w).ok_or(OpenglError::Size)?,

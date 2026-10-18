@@ -21,13 +21,12 @@ use calloop::{
     channel::{self, Sender},
 };
 use calloop_wayland_source::WaylandSource;
+use crab_common::gpu::GpuChoice;
 use crab_common::{
     gnome::{self, ShellProxyBlocking},
     gui::WIDGET_APP_ID,
 };
-use raw_window_handle::{
-    RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-};
+use raw_window_handle::{RawWindowHandle, WaylandWindowHandle};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     delegate_registry,
@@ -58,11 +57,10 @@ use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_callback, wl_output, wl_pointer, wl_seat, wl_surface},
 };
-use wayland_egl::WlEglSurface;
 
 use super::{
     CalloopSnafu, SIZE, Window, WindowError, WindowEvent,
-    wayland::WaylandError,
+    wayland::{self, WaylandError},
     widget::{
         Button, CursorShape, Output, OutputChange, Pointer, Position, Running, Surface, Widget,
     },
@@ -70,7 +68,7 @@ use super::{
 use crate::{
     backend::gnome::{self as backend, Signal},
     placement::Area,
-    renderer::Renderer,
+    renderer::{Renderer, Target},
     theme::Theme,
 };
 
@@ -91,7 +89,6 @@ pub struct Gnome<R: Renderer + 'static> {
     shell: ShellProxyBlocking<'static>,
     output: Option<Output>,
     placement: Placement,
-    egl_window: WlEglSurface,
     size: (u32, u32),
     qh: QueueHandle<State<R>>,
     conn: Connection,
@@ -118,6 +115,7 @@ struct MoveAck;
 pub fn open<R: Renderer + 'static>(
     theme: Arc<Theme>,
     events: Sender<WindowEvent>,
+    gpu: &GpuChoice,
 ) -> Result<Box<dyn Window>, WindowError> {
     let conn = Connection::connect_to_env().map_err(WaylandError::from)?;
     let (globals, event_queue) = registry_queue_init(&conn).map_err(WaylandError::from)?;
@@ -138,18 +136,17 @@ pub fn open<R: Renderer + 'static>(
     window.set_min_size(Some(size));
     window.set_max_size(Some(size));
     window.commit();
-    let egl_window = WlEglSurface::new(window.wl_surface().id(), size.0 as i32, size.1 as i32)
-        .map_err(|source| WaylandError::Wayland {
-            source,
-            thing: "egl_window".to_owned(),
-        })?;
     let window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(
         NonNull::new(window.wl_surface().id().as_ptr().cast()).ok_or(WaylandError::Window)?,
     ));
-    let display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-        NonNull::new(conn.backend().display_ptr().cast()).ok_or(WaylandError::Display)?,
-    ));
-    let renderer = R::setup(display_handle, window_handle, size.0, size.1)?;
+    let renderer = R::setup(Target {
+        display: wayland::display_handle(&conn)?,
+        window: window_handle,
+        size,
+        device: wayland::compositor_device(&conn, &globals),
+        gpu: gpu.clone(),
+        layers: theme.max_layers(),
+    })?;
     let event_loop: EventLoop<State<R>> = EventLoop::try_new().context(CalloopSnafu {
         thing: "creating event loop",
     })?;
@@ -199,7 +196,6 @@ pub fn open<R: Renderer + 'static>(
             },
         }),
         placement: Placement::Anchored,
-        egl_window,
         size,
         qh,
         conn,
@@ -373,7 +369,7 @@ impl<R: Renderer + 'static> Surface for Gnome<R> {
         Ok(OutputChange::Moved)
     }
 
-    fn present<T: Renderer>(&mut self, renderer: &T) -> Result<bool, WindowError> {
+    fn present<T: Renderer>(&mut self, renderer: &mut T) -> Result<bool, WindowError> {
         let surface = self.window.wl_surface();
         surface.frame(&self.qh, FrameCallbackData(surface.clone()));
         renderer.swapbuffers()?;
@@ -493,9 +489,6 @@ impl<R: Renderer + 'static> WindowHandler for State<R> {
         );
         if size != self.surface.size {
             self.surface.size = size;
-            self.surface
-                .egl_window
-                .resize(size.0 as i32, size.1 as i32, 0, 0);
             self.resized(size);
         }
         self.mapped();

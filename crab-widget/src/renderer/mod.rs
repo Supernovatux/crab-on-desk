@@ -14,12 +14,16 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+use crab_common::gpu::GpuChoice;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use snafu::Snafu;
 
 use crate::theme::Animation;
 
+#[cfg(feature = "opengl")]
 pub mod opengl;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerOffset {
@@ -38,19 +42,27 @@ impl Default for LayerOffset {
     }
 }
 
+pub struct Target {
+    pub display: RawDisplayHandle,
+    pub window: RawWindowHandle,
+    pub size: (u32, u32),
+    pub device: Option<u64>,
+    pub gpu: GpuChoice,
+    pub layers: usize,
+}
+
 #[derive(Debug, Snafu)]
 pub enum RendererError {
+    #[cfg(feature = "opengl")]
     #[snafu(context(false))]
     OpenGL { source: opengl::OpenglError },
+    #[cfg(feature = "vulkan")]
+    #[snafu(context(false))]
+    Vulkan { source: vulkan::VulkanError },
 }
 
 pub trait Renderer {
-    fn setup(
-        display: RawDisplayHandle,
-        window: RawWindowHandle,
-        w: u32,
-        h: u32,
-    ) -> Result<Box<Self>, RendererError>;
+    fn setup(target: Target) -> Result<Box<Self>, RendererError>;
     fn set_animation(&mut self, animation: &Animation) -> Result<(), RendererError>;
     fn draw(&mut self, w: i32, h: i32, frame: u32, mirrored: bool, offsets: &[LayerOffset]);
     fn replace_window(
@@ -59,6 +71,6 @@ pub trait Renderer {
         w: u32,
         h: u32,
     ) -> Result<(), RendererError>;
-    fn swapbuffers(&self) -> Result<(), RendererError>;
-    fn resize(&self, w: u32, h: u32) -> Result<(), RendererError>;
+    fn swapbuffers(&mut self) -> Result<(), RendererError>;
+    fn resize(&mut self, w: u32, h: u32) -> Result<(), RendererError>;
 }

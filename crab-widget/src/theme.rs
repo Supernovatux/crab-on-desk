@@ -14,7 +14,13 @@
 //     You should have received a copy of the GNU Affero General Public License
 //     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::{collections::BTreeMap, fs::File, io, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crab_common::{
     atlas::{Animations, MANIFEST_FILE, Rect, ThemeBehaviour, ThemeManifest, TrackingLayer},
@@ -65,6 +71,7 @@ pub struct Animation {
 pub struct Layer {
     pub bounds: Rect,
     pub tracking: TrackingLayer,
+    pub path: PathBuf,
     texture: Reader<Mmap>,
 }
 
@@ -72,6 +79,16 @@ impl Layer {
     #[must_use]
     pub fn blocks(&self) -> &[u8] {
         self.texture.levels().next().map_or(&[], |level| level.data)
+    }
+
+    #[must_use]
+    pub fn data_offset(&self) -> u64 {
+        (self.blocks().as_ptr().addr() - self.texture.data().as_ptr().addr()) as u64
+    }
+
+    #[must_use]
+    pub fn frame_bytes(&self) -> u64 {
+        frame_bytes(self.bounds)
     }
 }
 
@@ -96,6 +113,18 @@ impl Theme {
                 (*animation, Duration::from_millis(total))
             })
             .collect()
+    }
+
+    #[must_use]
+    pub fn max_layers(&self) -> usize {
+        self.manifest
+            .behaviour
+            .tracking
+            .values()
+            .map(|tracking| tracking.layers.len())
+            .max()
+            .unwrap_or(1)
+            .max(1)
     }
 
     #[must_use]
@@ -130,7 +159,8 @@ impl Theme {
             None => vec![Layer {
                 bounds: full,
                 tracking: TrackingLayer::default(),
-                texture: texture(path, full, info.frame_count)?,
+                texture: texture(&path, full, info.frame_count)?,
+                path,
             }],
             Some(tracking) => {
                 ensure!(
@@ -152,7 +182,8 @@ impl Theme {
                         Ok(Layer {
                             bounds: *bounds,
                             tracking: *tracking,
-                            texture: texture(path, *bounds, info.frame_count)?,
+                            texture: texture(&path, *bounds, info.frame_count)?,
+                            path,
                         })
                     })
                     .collect::<Result<_, ThemeError>>()?
@@ -175,19 +206,18 @@ impl Theme {
     }
 }
 
-fn texture(path: PathBuf, bounds: Rect, frame_count: u32) -> Result<Reader<Mmap>, ThemeError> {
-    let mapping = File::open(&path)
+fn frame_bytes(bounds: Rect) -> u64 {
+    u64::from(bounds.width.div_ceil(4)) * u64::from(bounds.height.div_ceil(4)) * BC7_BLOCK_BYTES
+}
+
+fn texture(path: &Path, bounds: Rect, frame_count: u32) -> Result<Reader<Mmap>, ThemeError> {
+    let mapping = File::open(path)
         .and_then(|file| unsafe { Mmap::map(&file) })
-        .context(ReadSnafu { path: path.clone() })?;
-    let reader = Reader::new(mapping).context(Ktx2Snafu { path: path.clone() })?;
+        .context(ReadSnafu { path })?;
+    let reader = Reader::new(mapping).context(Ktx2Snafu { path })?;
     let header = reader.header();
-    let level = reader
-        .levels()
-        .next()
-        .context(LayoutSnafu { path: path.clone() })?;
-    let frame_bytes = u64::from(bounds.width.div_ceil(4))
-        * u64::from(bounds.height.div_ceil(4))
-        * BC7_BLOCK_BYTES;
+    let level = reader.levels().next().context(LayoutSnafu { path })?;
+    let frame_bytes = frame_bytes(bounds);
     ensure!(
         bounds.width > 0
             && bounds.height > 0

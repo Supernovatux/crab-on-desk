@@ -21,6 +21,7 @@ use snafu::{OptionExt, Snafu};
 
 use crate::{
     dirs::{CommonError, get_config_file, get_theme_dir},
+    gpu::{GpuChoice, GraphicsApi},
     toml_file::{self, TomlFileError},
 };
 
@@ -47,6 +48,10 @@ pub struct Config {
     pub track_cursor: bool,
     #[serde(default = "positions_window_by_default")]
     pub position_window: bool,
+    #[serde(default)]
+    pub renderer: GraphicsApi,
+    #[serde(default)]
+    pub gpu: GpuChoice,
 }
 
 const fn tracks_cursor_by_default() -> bool {

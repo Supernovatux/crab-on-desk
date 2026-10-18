@@ -100,7 +100,7 @@ pub trait Surface: Sized + 'static {
         name: &str,
         renderer: &mut R,
     ) -> Result<OutputChange, WindowError>;
-    fn present<R: Renderer>(&mut self, renderer: &R) -> Result<bool, WindowError>;
+    fn present<R: Renderer>(&mut self, renderer: &mut R) -> Result<bool, WindowError>;
 }
 
 pub struct Widget<S: Surface, R: Renderer + 'static> {
@@ -947,7 +947,7 @@ impl<S: Surface, R: Renderer + 'static> Widget<S, R> {
             mirrored,
             &offsets,
         );
-        if !self.surface.present(&*self.renderer)? {
+        if !self.surface.present(&mut *self.renderer)? {
             self.presentation = Presentation::Idle;
         }
         Ok(())

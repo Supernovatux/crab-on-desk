@@ -20,6 +20,7 @@ use crab_common::{
     atlas::Animations,
     config::{Config, ConfigError},
     dirs::{CommonError, get_sibling_executable, get_widget_lock},
+    gpu::GPUS_COMMAND,
     gui::{GUI_BINARY, INIT_MODE},
     process,
 };
@@ -27,7 +28,7 @@ use crab_widget::{
     handler::{self, HandlerError, Outcome},
     state::StateMachine,
     theme::{Theme, ThemeError},
-    window::{WindowError, WindowHandle},
+    window::{self, WindowError, WindowHandle},
 };
 use snafu::{ResultExt, Snafu};
 
@@ -55,10 +56,15 @@ enum WidgetError {
     Init { source: io::Error },
     #[snafu(display("Unable to lock {path:?}"))]
     Lock { source: io::Error, path: PathBuf },
+    #[snafu(display("Unable to print the GPU list"))]
+    Gpus { source: serde_json::Error },
 }
 
 #[snafu::report]
 fn main() -> Result<(), WidgetError> {
+    if env::args().nth(1).as_deref() == Some(GPUS_COMMAND) {
+        return list_gpus();
+    }
     let path = get_widget_lock()?;
     let Some(_lock) = process::try_lock(&path).context(LockSnafu { path })? else {
         eprintln!("crab-widget is already running");
@@ -78,10 +84,21 @@ fn main() -> Result<(), WidgetError> {
         config.free_roam,
         Instant::now(),
     );
-    let (window, window_events) = WindowHandle::spawn(theme, Animations::default())?;
+    let (window, window_events) = WindowHandle::spawn(
+        theme,
+        Animations::default(),
+        config.renderer,
+        config.gpu.clone(),
+    )?;
     if handler::run(window, window_events, state, &config)? == Outcome::Restart {
         return Err(restart()).context(RestartSnafu);
     }
+    Ok(())
+}
+
+fn list_gpus() -> Result<(), WidgetError> {
+    let gpus = window::gpus()?;
+    println!("{}", serde_json::to_string(&gpus).context(GpusSnafu)?);
     Ok(())
 }
 

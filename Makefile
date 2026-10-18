@@ -1,7 +1,12 @@
 CARGO ?= cargo
 CARGO_FLAGS ?= --locked
 FEATURES ?=
-FEATURE_FLAGS := $(if $(FEATURES),--no-default-features --features "$(FEATURES)")
+RENDERERS ?= vulkan opengl
+DESKTOPS := hyprland kde gnome x11
+CUSTOM_RENDERERS := $(filter command line environment,$(origin RENDERERS))
+FEATURE_FLAGS := $(if $(FEATURES)$(CUSTOM_RENDERERS),--no-default-features --features "$(or $(FEATURES),$(DESKTOPS)) $(RENDERERS)")
+GLSLC ?= glslc
+SHADERS := $(wildcard crab-widget/shaders/*.vert crab-widget/shaders/*.frag)
 RELEASE := target/release
 BINS := crab-widget crab-hook crab-gui crab-codex
 
@@ -27,7 +32,7 @@ SIZE := 200
 ELECTRON ?= $(shell for version in $$(seq 99 -1 10) ''; do command -v electron$$version && break; done)
 HEADLESS := --ozone-platform=headless --ozone-override-screen-size=1024,1024
 
-.PHONY: all build install uninstall themes themes-install themes-uninstall clean
+.PHONY: all build install uninstall shaders themes themes-install themes-uninstall clean
 
 all: build
 
@@ -39,6 +44,11 @@ install: build
 ifneq ($(WITH_GNOME),)
 	install -Dm644 -t "$(DESTDIR)$(EXTENSIONS_DIR)/$(EXTENSION_UUID)" gnome-extension/extension.js gnome-extension/metadata.json
 endif
+
+shaders: $(addsuffix .spv,$(SHADERS))
+
+%.spv: %
+	$(GLSLC) -O --target-env=vulkan1.3 $< -o $@
 
 uninstall:
 	rm -f $(addprefix "$(DESTDIR)$(BINDIR)"/,$(BINS))

@@ -25,12 +25,13 @@ use calloop::channel::{self, Channel, Sender};
 use crab_common::{
     atlas::Animations,
     desktop::{self, Session},
+    gpu::{GpuChoice, GpuInfo, GraphicsApi},
 };
 use snafu::{ResultExt, Snafu, ensure};
 
 use crate::{
     placement::Location,
-    renderer::RendererError,
+    renderer::{Renderer, RendererError},
     theme::{Theme, ThemeError},
 };
 
@@ -129,7 +130,12 @@ pub struct WindowHandle {
 }
 
 impl WindowHandle {
-    pub fn spawn(theme: Theme, animation: Animations) -> Result<(Self, WindowEvents), WindowError> {
+    pub fn spawn(
+        theme: Theme,
+        animation: Animations,
+        api: GraphicsApi,
+        gpu: GpuChoice,
+    ) -> Result<(Self, WindowEvents), WindowError> {
         ensure!(theme.contains(animation), MissingSnafu { animation });
         let theme = Arc::new(theme);
         let window_theme = Arc::clone(&theme);
@@ -139,7 +145,7 @@ impl WindowHandle {
         let thread = thread::Builder::new()
             .name("crab-window".to_owned())
             .spawn(move || {
-                let window = create(window_theme, event_sender)?;
+                let window = create(window_theme, event_sender, api, &gpu)?;
                 ready.send(()).map_err(|_| WindowError::Closed)?;
                 window.run(animation, receiver)
             })
@@ -192,18 +198,85 @@ fn join(thread: JoinHandle<Result<(), WindowError>>) -> Result<(), WindowError> 
     thread.join().map_err(|_| WindowError::Panicked)?
 }
 
-fn create(theme: Arc<Theme>, events: Sender<WindowEvent>) -> Result<Box<dyn Window>, WindowError> {
-    use crate::renderer::opengl::Opengl;
+#[cfg(all(feature = "vulkan", feature = "opengl"))]
+fn create(
+    theme: Arc<Theme>,
+    events: Sender<WindowEvent>,
+    api: GraphicsApi,
+    gpu: &GpuChoice,
+) -> Result<Box<dyn Window>, WindowError> {
+    use crate::renderer::{opengl::Opengl, vulkan::Vulkan};
 
+    match api {
+        GraphicsApi::Opengl => open::<Opengl>(theme, events, gpu),
+        GraphicsApi::Vulkan => match open::<Vulkan>(Arc::clone(&theme), events.clone(), gpu) {
+            Err(WindowError::Renderer {
+                source: source @ RendererError::Vulkan { .. },
+            }) => {
+                eprintln!(
+                    "Falling back to OpenGL: {}",
+                    snafu::Report::from_error(source)
+                );
+                open::<Opengl>(theme, events, gpu)
+            }
+            window => window,
+        },
+    }
+}
+
+#[cfg(not(all(feature = "vulkan", feature = "opengl")))]
+fn create(
+    theme: Arc<Theme>,
+    events: Sender<WindowEvent>,
+    api: GraphicsApi,
+    gpu: &GpuChoice,
+) -> Result<Box<dyn Window>, WindowError> {
+    #[cfg(feature = "opengl")]
+    use crate::renderer::opengl::Opengl as Compiled;
+    #[cfg(feature = "vulkan")]
+    use crate::renderer::vulkan::Vulkan as Compiled;
+
+    let compiled = if cfg!(feature = "vulkan") {
+        GraphicsApi::Vulkan
+    } else {
+        GraphicsApi::Opengl
+    };
+    if api != compiled {
+        eprintln!("This build has no {api:?} renderer, using {compiled:?}");
+    }
+    open::<Compiled>(theme, events, gpu)
+}
+
+fn open<R: Renderer + 'static>(
+    theme: Arc<Theme>,
+    events: Sender<WindowEvent>,
+    gpu: &GpuChoice,
+) -> Result<Box<dyn Window>, WindowError> {
     match desktop::detect() {
         #[cfg(feature = "gnome")]
         Some(Session::Wayland(Some(desktop::Compositor::Gnome))) => {
-            gnome::open::<Opengl>(theme, events)
+            gnome::open::<R>(theme, events, gpu)
         }
         #[cfg(feature = "wayland")]
-        Some(Session::Wayland(_)) => wayland::open::<Opengl>(theme, events),
+        Some(Session::Wayland(_)) => wayland::open::<R>(theme, events, gpu),
         #[cfg(feature = "x11")]
-        Some(Session::X11) => x11::open::<Opengl>(theme, events),
+        Some(Session::X11) => x11::open::<R>(theme, events, gpu),
         _ => UnsupportedSnafu.fail(),
     }
+}
+
+#[cfg(feature = "vulkan")]
+pub fn gpus() -> Result<Vec<GpuInfo>, WindowError> {
+    match desktop::detect() {
+        #[cfg(feature = "wayland")]
+        Some(Session::Wayland(_)) => wayland::gpus(),
+        #[cfg(feature = "x11")]
+        Some(Session::X11) => x11::gpus(),
+        _ => UnsupportedSnafu.fail(),
+    }
+}
+
+#[cfg(not(feature = "vulkan"))]
+pub const fn gpus() -> Result<Vec<GpuInfo>, WindowError> {
+    Ok(Vec::new())
 }

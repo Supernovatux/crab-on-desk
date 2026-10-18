@@ -23,6 +23,7 @@ pub mod desktop;
 pub mod dirs;
 #[cfg(feature = "gnome")]
 pub mod gnome;
+pub mod gpu;
 pub mod gui;
 pub mod hooks;
 pub mod ipc;
